@@ -1,3 +1,4 @@
+cat > app/src/main/java/com/maurointeractive/reactionrush/MainActivity.kt <<'EOF'
 package com.maurointeractive.reactionrush
 
 import android.content.Context
@@ -32,6 +33,11 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+enum class AppScreen {
+    HOME,
+    GAME
+}
+
 enum class GameState {
     READY,
     WAITING,
@@ -41,7 +47,27 @@ enum class GameState {
     SESSION_RESULT
 }
 
-private const val TOTAL_ROUNDS = 5
+enum class GameMode(
+    val title: String,
+    val rounds: Int,
+    val description: String
+) {
+    QUICK_DRAW(
+        "QUICK DRAW",
+        1,
+        "One shot. One reaction. Chase your fastest time."
+    ),
+    CLASSIC_RUSH(
+        "CLASSIC RUSH",
+        5,
+        "Five rounds. Balance raw speed with consistency."
+    ),
+    ENDURANCE_RUSH(
+        "ENDURANCE RUSH",
+        10,
+        "Ten rounds. Stay sharp and protect your average."
+    )
+}
 
 @Composable
 fun ReactionRushApp() {
@@ -50,25 +76,231 @@ fun ReactionRushApp() {
         context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
     }
 
-    var state by remember { mutableStateOf(GameState.READY) }
-    var roundId by remember { mutableIntStateOf(0) }
-    var currentRound by remember { mutableIntStateOf(1) }
-    var goTime by remember { mutableLongStateOf(0L) }
-    var lastScore by remember { mutableIntStateOf(0) }
+    var screen by remember { mutableStateOf(AppScreen.HOME) }
+    var selectedMode by remember { mutableStateOf(GameMode.CLASSIC_RUSH) }
 
-    var best by remember {
+    val best = prefs.getInt("best", 0)
+    val attempts = prefs.getInt("attempts", 0)
+
+    when (screen) {
+        AppScreen.HOME -> {
+            HomeScreen(
+                best = best,
+                attempts = attempts,
+                onModeSelected = { mode ->
+                    selectedMode = mode
+                    screen = AppScreen.GAME
+                }
+            )
+        }
+
+        AppScreen.GAME -> {
+            GameScreen(
+                mode = selectedMode,
+                onBackHome = {
+                    screen = AppScreen.HOME
+                }
+            )
+        }
+    }
+}
+
+@Composable
+private fun HomeScreen(
+    best: Int,
+    attempts: Int,
+    onModeSelected: (GameMode) -> Unit
+) {
+    Surface(
+        modifier = Modifier.fillMaxSize(),
+        color = Color(0xFF0B1020)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Spacer(Modifier.height(30.dp))
+
+            Text(
+                "REACTION RUSH",
+                color = Color.White,
+                fontSize = 30.sp,
+                fontWeight = FontWeight.Black
+            )
+
+            Text(
+                "Mauro Interactive",
+                color = Color(0xFFAAB4D0),
+                fontSize = 14.sp
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            Text(
+                "TEST YOUR REFLEXES",
+                color = Color(0xFF62E6B5),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.height(24.dp))
+
+            Row(
+                Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                StatCard(
+                    "OVERALL BEST",
+                    if (best == 0) "—" else "$best ms",
+                    Modifier.weight(1f)
+                )
+
+                StatCard(
+                    "REACTIONS",
+                    attempts.toString(),
+                    Modifier.weight(1f)
+                )
+            }
+
+            Spacer(Modifier.height(28.dp))
+
+            Text(
+                "SELECT MODE",
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF8D98B8),
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            ModeCard(
+                mode = GameMode.QUICK_DRAW,
+                accent = Color(0xFF4DA3FF),
+                onClick = { onModeSelected(GameMode.QUICK_DRAW) }
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            ModeCard(
+                mode = GameMode.CLASSIC_RUSH,
+                accent = Color(0xFF62E6B5),
+                onClick = { onModeSelected(GameMode.CLASSIC_RUSH) }
+            )
+
+            Spacer(Modifier.height(12.dp))
+
+            ModeCard(
+                mode = GameMode.ENDURANCE_RUSH,
+                accent = Color(0xFFFFB454),
+                onClick = { onModeSelected(GameMode.ENDURANCE_RUSH) }
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            Text(
+                "More modes and challenges coming soon.",
+                color = Color(0xFF697491),
+                fontSize = 12.sp,
+                textAlign = TextAlign.Center
+            )
+
+            Spacer(Modifier.height(10.dp))
+        }
+    }
+}
+
+@Composable
+private fun ModeCard(
+    mode: GameMode,
+    accent: Color,
+    onClick: () -> Unit
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick),
+        colors = CardDefaults.cardColors(
+            containerColor = Color(0xFF151D35)
+        ),
+        shape = RoundedCornerShape(20.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Box(
+                modifier = Modifier
+                    .size(10.dp)
+                    .background(accent, RoundedCornerShape(10.dp))
+            )
+
+            Spacer(Modifier.width(14.dp))
+
+            Column(
+                modifier = Modifier.weight(1f)
+            ) {
+                Text(
+                    mode.title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black
+                )
+
+                Spacer(Modifier.height(4.dp))
+
+                Text(
+                    mode.description,
+                    color = Color(0xFFAAB4D0),
+                    fontSize = 13.sp
+                )
+            }
+
+            Spacer(Modifier.width(12.dp))
+
+            Text(
+                "${mode.rounds}",
+                color = accent,
+                fontSize = 24.sp,
+                fontWeight = FontWeight.Black
+            )
+        }
+    }
+}
+
+@Composable
+private fun GameScreen(
+    mode: GameMode,
+    onBackHome: () -> Unit
+) {
+    val context = LocalContext.current
+    val prefs = remember {
+        context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
+    }
+
+    var state by remember(mode) { mutableStateOf(GameState.READY) }
+    var roundId by remember(mode) { mutableIntStateOf(0) }
+    var currentRound by remember(mode) { mutableIntStateOf(1) }
+    var goTime by remember(mode) { mutableLongStateOf(0L) }
+    var lastScore by remember(mode) { mutableIntStateOf(0) }
+
+    var best by remember(mode) {
         mutableIntStateOf(prefs.getInt("best", 0))
     }
 
-    var attempts by remember {
+    var attempts by remember(mode) {
         mutableIntStateOf(prefs.getInt("attempts", 0))
     }
 
-    var sessionScores by remember {
+    var sessionScores by remember(mode) {
         mutableStateOf(emptyList<Int>())
     }
 
-    var falseStarts by remember {
+    var falseStarts by remember(mode) {
         mutableIntStateOf(0)
     }
 
@@ -92,6 +324,14 @@ fun ReactionRushApp() {
         lastScore = 0
         sessionScores = emptyList()
         falseStarts = 0
+        state = GameState.READY
+    }
+
+    fun startSession() {
+        currentRound = 1
+        lastScore = 0
+        sessionScores = emptyList()
+        falseStarts = 0
         beginRound()
     }
 
@@ -111,8 +351,7 @@ fun ReactionRushApp() {
         if (sessionScores.isEmpty()) 0
         else sessionScores.average().roundToInt()
 
-    val sessionBest =
-        sessionScores.minOrNull() ?: 0
+    val sessionBest = sessionScores.minOrNull() ?: 0
 
     val bg = when (state) {
         GameState.GO -> Color(0xFF0D7A55)
@@ -131,35 +370,46 @@ fun ReactionRushApp() {
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
+            Spacer(Modifier.height(18.dp))
 
-            Spacer(Modifier.height(24.dp))
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    "‹ HOME",
+                    modifier = Modifier.clickable {
+                        onBackHome()
+                    },
+                    color = Color(0xFFAAB4D0),
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold
+                )
 
-            Text(
-                "REACTION RUSH",
-                color = Color.White,
-                fontSize = 28.sp,
-                fontWeight = FontWeight.Black
-            )
+                Spacer(Modifier.weight(1f))
 
-            Text(
-                "Mauro Interactive",
-                color = Color(0xFFAAB4D0),
-                fontSize = 14.sp
-            )
+                Text(
+                    mode.title,
+                    color = Color.White,
+                    fontSize = 18.sp,
+                    fontWeight = FontWeight.Black
+                )
+            }
 
-            Spacer(Modifier.height(16.dp))
+            Spacer(Modifier.height(18.dp))
 
-            if (state != GameState.READY &&
+            if (
+                state != GameState.READY &&
                 state != GameState.SESSION_RESULT
             ) {
                 Text(
-                    "ROUND $currentRound / $TOTAL_ROUNDS",
+                    "ROUND $currentRound / ${mode.rounds}",
                     color = Color(0xFF8D98B8),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
                 )
 
-                Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(12.dp))
             }
 
             Row(
@@ -179,7 +429,7 @@ fun ReactionRushApp() {
                 )
             }
 
-            Spacer(Modifier.height(22.dp))
+            Spacer(Modifier.height(20.dp))
 
             Box(
                 modifier = Modifier
@@ -191,9 +441,8 @@ fun ReactionRushApp() {
                     )
                     .clickable {
                         when (state) {
-
                             GameState.READY -> {
-                                resetSession()
+                                startSession()
                             }
 
                             GameState.WAITING -> {
@@ -209,9 +458,7 @@ fun ReactionRushApp() {
 
                                 lastScore = score
                                 attempts++
-
-                                sessionScores =
-                                    sessionScores + score
+                                sessionScores = sessionScores + score
 
                                 if (best == 0 || score < best) {
                                     best = score
@@ -227,7 +474,7 @@ fun ReactionRushApp() {
                             }
 
                             GameState.ROUND_RESULT -> {
-                                if (currentRound >= TOTAL_ROUNDS) {
+                                if (currentRound >= mode.rounds) {
                                     state = GameState.SESSION_RESULT
                                 } else {
                                     currentRound++
@@ -246,35 +493,26 @@ fun ReactionRushApp() {
                     },
                 contentAlignment = Alignment.Center
             ) {
-
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(28.dp)
+                    modifier = Modifier.padding(26.dp)
                 ) {
-
                     val title = when (state) {
-                        GameState.READY ->
-                            "CLASSIC RUSH"
-
-                        GameState.WAITING ->
-                            "WAIT…"
-
-                        GameState.GO ->
-                            "TAP!"
-
-                        GameState.ROUND_RESULT ->
-                            "$lastScore ms"
-
-                        GameState.FALSE_START ->
-                            "TOO SOON!"
-
+                        GameState.READY -> mode.title
+                        GameState.WAITING -> "WAIT…"
+                        GameState.GO -> "TAP!"
+                        GameState.ROUND_RESULT -> "$lastScore ms"
+                        GameState.FALSE_START -> "TOO SOON!"
                         GameState.SESSION_RESULT ->
-                            "RUSH COMPLETE"
+                            if (mode == GameMode.QUICK_DRAW)
+                                "DRAW COMPLETE"
+                            else
+                                "RUSH COMPLETE"
                     }
 
                     val subtitle = when (state) {
                         GameState.READY ->
-                            "Five rounds. Wait for green, then react as fast as you can.\n\nTap to begin."
+                            "${mode.description}\n\nTap to begin."
 
                         GameState.WAITING ->
                             "Don't tap until it turns green."
@@ -283,8 +521,8 @@ fun ReactionRushApp() {
                             "NOW!"
 
                         GameState.ROUND_RESULT ->
-                            if (currentRound == TOTAL_ROUNDS)
-                                "Round $currentRound complete. Tap for results."
+                            if (currentRound == mode.rounds)
+                                "Round complete. Tap for results."
                             else
                                 "Round $currentRound complete. Tap for the next round."
 
@@ -292,7 +530,7 @@ fun ReactionRushApp() {
                             "False start! This round doesn't count.\nTap to retry."
 
                         GameState.SESSION_RESULT ->
-                            "Tap to play another five rounds."
+                            "Tap to play this mode again."
                     }
 
                     Text(
@@ -302,7 +540,7 @@ fun ReactionRushApp() {
                             if (
                                 state == GameState.ROUND_RESULT ||
                                 state == GameState.SESSION_RESULT
-                            ) 40.sp else 36.sp,
+                            ) 40.sp else 34.sp,
                         fontWeight = FontWeight.Black,
                         textAlign = TextAlign.Center
                     )
@@ -317,8 +555,7 @@ fun ReactionRushApp() {
                     )
 
                     if (state == GameState.SESSION_RESULT) {
-
-                        Spacer(Modifier.height(30.dp))
+                        Spacer(Modifier.height(26.dp))
 
                         Row(
                             Modifier.fillMaxWidth(),
@@ -338,7 +575,7 @@ fun ReactionRushApp() {
                             )
                         }
 
-                        Spacer(Modifier.height(12.dp))
+                        Spacer(Modifier.height(10.dp))
 
                         MiniResult(
                             "FALSE STARTS",
@@ -346,28 +583,32 @@ fun ReactionRushApp() {
                             Modifier.fillMaxWidth()
                         )
 
-                        Spacer(Modifier.height(24.dp))
+                        if (mode.rounds > 1) {
+                            Spacer(Modifier.height(20.dp))
 
-                        sessionScores.forEachIndexed { index, score ->
-                            Text(
-                                "Round ${index + 1}: $score ms",
-                                color = Color(0xFFAAB4D0),
-                                fontSize = 14.sp
-                            )
+                            sessionScores.forEachIndexed { index, score ->
+                                Text(
+                                    "Round ${index + 1}: $score ms",
+                                    color = Color(0xFFAAB4D0),
+                                    fontSize =
+                                        if (mode.rounds >= 10) 12.sp
+                                        else 14.sp
+                                )
+                            }
                         }
                     }
                 }
             }
 
-            Spacer(Modifier.height(18.dp))
+            Spacer(Modifier.height(14.dp))
 
             Text(
                 when (state) {
                     GameState.READY ->
-                        "Classic Rush • 5 rounds"
+                        "${mode.title} • ${mode.rounds} ${if (mode.rounds == 1) "round" else "rounds"}"
 
                     GameState.SESSION_RESULT ->
-                        "Consistency matters as much as raw speed."
+                        "Tap HOME to choose another challenge."
 
                     else ->
                         "Stay ready. Don't anticipate the signal."
@@ -377,7 +618,7 @@ fun ReactionRushApp() {
                 textAlign = TextAlign.Center
             )
 
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(8.dp))
         }
     }
 }
@@ -437,23 +678,4 @@ private fun MiniResult(
             Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                label,
-                color = Color(0xFF8D98B8),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                value,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
-        }
-    }
-}
+            horizontalAlignment
