@@ -1,5 +1,3 @@
-cat > app/src/main/java/com/maurointeractive/reactionrush/MainActivity.kt <<'EOF'
-package com.maurointeractive.reactionrush
 
 import android.content.Context
 import android.os.Bundle
@@ -661,6 +659,7 @@ private fun StatCard(
     }
 }
 
+
 @Composable
 private fun MiniResult(
     label: String,
@@ -675,7 +674,26 @@ private fun MiniResult(
         shape = RoundedCornerShape(14.dp)
     ) {
         Column(
-            Modifier
+            modifier = Modifier
                 .fillMaxWidth()
                 .padding(12.dp),
-            horizontalAlignment
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Text(
+                text = label,
+                color = Color(0xFF8D98B8),
+                fontSize = 10.sp,
+                fontWeight = FontWeight.Bold
+            )
+
+            Spacer(Modifier.height(4.dp))
+
+            Text(
+                text = value,
+                color = Color.White,
+                fontSize = 18.sp,
+                fontWeight = FontWeight.Bold
+            )
+        }
+    }
+}
