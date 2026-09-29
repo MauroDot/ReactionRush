@@ -1,3 +1,5 @@
+package com.maurointeractive.reactionrush
+
 
 import android.content.Context
 import android.os.Bundle
