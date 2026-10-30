@@ -78,10 +78,12 @@ fun ReactionRushApp() {
             GameScreen(
                 mode = selectedMode,
                 records = records,
-                onReaction = { mode, score, scores ->
-                    val update = recordsRepository.recordReaction(mode, score, scores)
+                onStartSession = recordsRepository::startSession,
+                onAbandonSession = recordsRepository::abandonSession,
+                onReaction = { sessionId, mode, score, scores ->
+                    val update = recordsRepository.recordReaction(sessionId, mode, score, scores)
                     records = update.records
-                    update.isNewRecord
+                    update
                 },
                 onBackHome = {
                     screen = AppScreen.HOME
@@ -151,6 +153,10 @@ private fun HomeScreen(
             }
 
             Spacer(Modifier.height(28.dp))
+
+            PlayerProgressCard(records.totalXp)
+
+            Spacer(Modifier.height(24.dp))
 
             Text(
                 "SELECT MODE",
@@ -275,7 +281,9 @@ private fun ModeCard(
 private fun GameScreen(
     mode: GameMode,
     records: PersonalRecords,
-    onReaction: (GameMode, Int, List<Int>) -> Boolean,
+    onStartSession: (GameMode) -> String,
+    onAbandonSession: (String) -> Unit,
+    onReaction: (String, GameMode, Int, List<Int>) -> ReactionUpdate,
     onBackHome: () -> Unit
 ) {
     val context = LocalContext.current
@@ -287,6 +295,13 @@ private fun GameScreen(
     var lastScore by remember(mode) { mutableIntStateOf(0) }
 
     var isNewRecord by remember(mode) { mutableStateOf(false) }
+    var sessionId by remember(mode) { mutableStateOf("") }
+    var sessionReward by remember(mode) { mutableStateOf<SessionReward?>(null) }
+    val abandonSession by rememberUpdatedState(onAbandonSession)
+
+    DisposableEffect(mode) {
+        onDispose { abandonSession(sessionId) }
+    }
 
     var sessionScores by remember(mode) {
         mutableStateOf(emptyList<Int>())
@@ -317,6 +332,8 @@ private fun GameScreen(
         sessionScores = emptyList()
         falseStarts = 0
         isNewRecord = false
+        sessionReward = null
+        sessionId = ""
         state = GameState.READY
     }
 
@@ -326,6 +343,8 @@ private fun GameScreen(
         sessionScores = emptyList()
         falseStarts = 0
         isNewRecord = false
+        sessionReward = null
+        sessionId = onStartSession(mode)
         beginRound()
     }
 
@@ -373,6 +392,7 @@ private fun GameScreen(
                 Text(
                     "‹ HOME",
                     modifier = Modifier.clickable {
+                        onAbandonSession(sessionId)
                         onBackHome()
                     },
                     color = Color(0xFFAAB4D0),
@@ -453,7 +473,9 @@ private fun GameScreen(
 
                                 lastScore = score
                                 sessionScores = sessionScores + score
-                                isNewRecord = onReaction(mode, score, sessionScores)
+                                val update = onReaction(sessionId, mode, score, sessionScores)
+                                isNewRecord = update.isNewRecord
+                                sessionReward = update.reward
 
                                 state = GameState.ROUND_RESULT
                                 buzz(45)
@@ -524,11 +546,11 @@ private fun GameScreen(
                     Text(
                         title,
                         color = Color.White,
-                        fontSize =
-                            if (
-                                state == GameState.ROUND_RESULT ||
-                                state == GameState.SESSION_RESULT
-                            ) 40.sp else 34.sp,
+                        fontSize = when (state) {
+                            GameState.ROUND_RESULT -> 40.sp
+                            GameState.SESSION_RESULT -> 28.sp
+                            else -> 34.sp
+                        },
                         fontWeight = FontWeight.Black,
                         textAlign = TextAlign.Center
                     )
@@ -541,6 +563,24 @@ private fun GameScreen(
                         fontSize = 17.sp,
                         textAlign = TextAlign.Center
                     )
+
+                    sessionReward?.let { reward ->
+                        if (reward.newLevel > reward.previousLevel && (
+                            state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                        )) {
+                            Spacer(Modifier.height(14.dp))
+                            Text(
+                                "LEVEL UP! LEVEL ${reward.newLevel}",
+                                modifier = Modifier.semantics {
+                                    liveRegion = LiveRegionMode.Polite
+                                },
+                                color = Color(0xFFFFD166),
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                textAlign = TextAlign.Center
+                            )
+                        }
+                    }
 
                     if (isNewRecord && (
                         state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
@@ -559,6 +599,45 @@ private fun GameScreen(
 
                     if (state == GameState.SESSION_RESULT) {
                         Spacer(Modifier.height(26.dp))
+
+                        sessionReward?.let { reward ->
+                            Text(
+                                "MEDAL: ${reward.medal.title}",
+                                color = medalColor(reward.medal),
+                                fontSize = 20.sp,
+                                fontWeight = FontWeight.Black,
+                                textAlign = TextAlign.Center
+                            )
+
+                            Spacer(Modifier.height(10.dp))
+
+                            Text(
+                                "+${reward.awardedXp} XP",
+                                color = Color(0xFF62E6B5),
+                                fontSize = 30.sp,
+                                fontWeight = FontWeight.Black
+                            )
+
+                            Text(
+                                "Base ${reward.xp.baseXp} XP • Speed +${reward.xp.speedBonusXp} XP\n" +
+                                    "Consistency +${reward.xp.consistencyBonusXp} XP",
+                                color = Color(0xFFAAB4D0),
+                                fontSize = 13.sp,
+                                textAlign = TextAlign.Center
+                            )
+
+                            if (reward.awardedXp < reward.xp.totalXp) {
+                                Text(
+                                    "XP limit reached",
+                                    color = Color(0xFFAAB4D0),
+                                    fontSize = 13.sp
+                                )
+                            }
+
+                            Spacer(Modifier.height(18.dp))
+                            PlayerProgressCard(records.totalXp)
+                            Spacer(Modifier.height(18.dp))
+                        }
 
                         Row(
                             Modifier.fillMaxWidth(),
@@ -627,6 +706,55 @@ private fun GameScreen(
 }
 
 private fun formatRecord(scoreMs: Int): String = if (scoreMs == 0) "—" else "$scoreMs ms"
+
+private fun medalColor(medal: PerformanceMedal): Color = when (medal) {
+    PerformanceMedal.ELITE -> Color(0xFF62E6B5)
+    PerformanceMedal.PLATINUM -> Color(0xFFAFD8F8)
+    PerformanceMedal.GOLD -> Color(0xFFFFD166)
+    PerformanceMedal.SILVER -> Color(0xFFCCD3DF)
+    PerformanceMedal.BRONZE -> Color(0xFFE4A16B)
+    PerformanceMedal.UNRANKED -> Color(0xFFAAB4D0)
+}
+
+@Composable
+private fun PlayerProgressCard(totalXp: Long) {
+    val progress = PlayerProgression.levelProgress(totalXp)
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35)),
+        shape = RoundedCornerShape(18.dp)
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(16.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            Text(
+                "LEVEL ${progress.level}",
+                color = Color(0xFF62E6B5),
+                fontSize = 20.sp,
+                fontWeight = FontWeight.Black
+            )
+            Text(
+                "TOTAL XP: ${progress.totalXp}",
+                color = Color.White,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold
+            )
+            LinearProgressIndicator(
+                progress = { progress.fraction },
+                modifier = Modifier.fillMaxWidth(),
+                color = Color(0xFF62E6B5),
+                trackColor = Color(0xFF2A3554)
+            )
+            Text(
+                if (progress.isMaxLevel) "MAX LEVEL"
+                else "${progress.xpIntoLevel} / ${progress.xpToNextLevel} XP TO LEVEL ${progress.level + 1}",
+                color = Color(0xFFAAB4D0),
+                fontSize = 12.sp
+            )
+        }
+    }
+}
 
 @Composable
 private fun StatCard(
