@@ -40,6 +40,7 @@ class RecordsRepositoryTest {
         assertEquals(0, records.lifetimeBestMs)
         assertEquals(0, records.lifetimeReactions)
         assertEquals(0L, records.totalXp)
+        assertEquals(AchievementState(), records.achievements)
         GameMode.entries.forEach { assertEquals(0, records.bestFor(it)) }
         assertTrue(prefs.all.isEmpty())
     }
@@ -200,7 +201,8 @@ class RecordsRepositoryTest {
                 "attempts" to 16,
                 "record_quick_draw" to 180,
                 "record_classic_rush" to 240,
-                "record_endurance_rush" to 310
+                "record_endurance_rush" to 310,
+                "clean_session_streak" to 3
             ),
             storedValues
         )
@@ -215,13 +217,28 @@ class RecordsRepositoryTest {
         assertEquals(310, reloaded.bestFor(GameMode.ENDURANCE_RUSH))
         assertEquals(180, reloaded.lifetimeBestMs)
         assertEquals(16, reloaded.lifetimeReactions)
-        val storedXp = DocumentBuilderFactory.newInstance().newDocumentBuilder()
-            .parse(preferencesFile).getElementsByTagName("long").item(0) as Element
-        assertEquals("total_xp", storedXp.getAttribute("name"))
-        assertEquals(repository.load().totalXp, storedXp.getAttribute("value").toLong())
+        val storedLongs = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(preferencesFile).getElementsByTagName("long")
+        val storedLongValues = (0 until storedLongs.length).associate { index ->
+            val entry = storedLongs.item(index) as Element
+            entry.getAttribute("name") to entry.getAttribute("value").toLong()
+        }
+        assertEquals(mapOf("total_xp" to repository.load().totalXp, "completed_sessions" to 3L), storedLongValues)
         assertEquals(repository.load().totalXp, reloaded.totalXp)
         assertTrue(reloaded.totalXp > 0)
         assertFalse(prefs.contains("active_session_id"))
+        assertEquals(repository.load().achievements, reloaded.achievements)
+        assertEquals(3L, reloaded.achievements.completedSessions)
+        assertEquals(3, reloaded.achievements.cleanSessionStreak)
+        val storedSets = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(preferencesFile).getElementsByTagName("set")
+        val achievementSet = (0 until storedSets.length).map { storedSets.item(it) as Element }
+            .single { it.getAttribute("name") == "unlocked_achievement_ids" }
+        val storedIds = achievementSet.getElementsByTagName("string")
+        assertEquals(
+            reloaded.achievements.unlocked.map { it.name }.toSet(),
+            (0 until storedIds.length).map { storedIds.item(it).textContent }.toSet()
+        )
     }
 
     @Test
@@ -276,6 +293,7 @@ class RecordsRepositoryTest {
         assertEquals(first, prefs.getString("active_session_id", null))
         assertEquals("CLASSIC_RUSH", prefs.getString("active_session_mode", null))
         assertEquals(0, prefs.getInt("active_session_rounds", -1))
+        assertFalse(prefs.getBoolean("active_session_had_false_start", true))
         assertEquals(0L, repository.load().totalXp)
         assertFalse(prefs.contains("total_xp"))
         assertFalse(prefs.contains("attempts"))
@@ -285,6 +303,7 @@ class RecordsRepositoryTest {
         assertEquals(replacement, prefs.getString("active_session_id", null))
         assertEquals("ENDURANCE_RUSH", prefs.getString("active_session_mode", null))
         assertEquals(0, prefs.getInt("active_session_rounds", -1))
+        assertFalse(prefs.getBoolean("active_session_had_false_start", true))
         assertEquals(0L, repository.load().totalXp)
     }
 
@@ -318,6 +337,7 @@ class RecordsRepositoryTest {
         assertFalse(prefs.contains("active_session_id"))
         assertFalse(prefs.contains("active_session_mode"))
         assertFalse(prefs.contains("active_session_rounds"))
+        assertFalse(prefs.contains("active_session_had_false_start"))
     }
 
     @Test
@@ -445,6 +465,7 @@ class RecordsRepositoryTest {
         assertFalse(prefs.contains("active_session_id"))
         assertFalse(prefs.contains("active_session_mode"))
         assertFalse(prefs.contains("active_session_rounds"))
+        assertFalse(prefs.contains("active_session_had_false_start"))
         val saved = prefs.all.toMap()
         val lateRound = RecordsRepository(prefs)
             .recordReaction(sessionId, GameMode.CLASSIC_RUSH, 200, List(2) { 200 })
@@ -595,9 +616,287 @@ class RecordsRepositoryTest {
         assertEquals(PlayerProgression.medal(199), reward.medal)
     }
 
-    private fun completeSession(mode: GameMode, scores: List<Int>): ReactionUpdate {
+    @Test
+    fun finalReactionUnlocksMedalHierarchyAndConsistencyTogetherOnlyOnce() {
+        val sessionId = repository.startSession(GameMode.CLASSIC_RUSH)
+        repeat(4) { index ->
+            val round = repository.recordReaction(sessionId, GameMode.CLASSIC_RUSH, 199, List(index + 1) { 199 })
+            assertEquals(AchievementState(), round.records.achievements)
+            assertFalse(prefs.contains("completed_sessions"))
+            assertNull(round.reward)
+        }
+
+        val completed = repository.recordReaction(sessionId, GameMode.CLASSIC_RUSH, 199, List(5) { 199 })
+        val expected = setOf(
+            Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX,
+            Achievement.ELITE_REFLEX, Achievement.STEADY_HANDS
+        )
+        assertEquals(expected, completed.records.achievements.unlocked)
+        assertEquals(expected, checkNotNull(completed.reward).newlyUnlocked)
+        assertEquals(1L, completed.records.achievements.completedSessions)
+        assertEquals(1, completed.records.achievements.cleanSessionStreak)
+        assertEquals(expected.map { it.name }.toSet(), prefs.getStringSet("unlocked_achievement_ids", null))
+        assertFalse(prefs.contains("active_session_had_false_start"))
+        val saved = prefs.all.toMap()
+        val duplicate = RecordsRepository(prefs)
+            .recordReaction(sessionId, GameMode.CLASSIC_RUSH, 199, List(5) { 199 })
+        assertNull(duplicate.reward)
+        assertEquals(completed.records, duplicate.records)
+        assertEquals(saved, prefs.all)
+    }
+
+    @Test
+    fun previouslyUnlockedAchievementsStayUnlockedWithoutBeingAnnouncedAgain() {
+        val first = completeSession(GameMode.QUICK_DRAW, listOf(199))
+        val second = completeSession(GameMode.QUICK_DRAW, listOf(198))
+
+        assertEquals(3, checkNotNull(first.reward).newlyUnlocked.size)
+        assertTrue(checkNotNull(second.reward).newlyUnlocked.isEmpty())
+        assertEquals(first.records.achievements.unlocked, second.records.achievements.unlocked)
+        assertEquals(2L, second.records.achievements.completedSessions)
+        assertEquals(2, second.records.achievements.cleanSessionStreak)
+    }
+
+    @Test
+    fun falseStartsBeforeAndAfterValidRoundsOnlyResetTheStreakWhenTheSessionCompletes() {
+        repeat(2) { completeSession(GameMode.QUICK_DRAW, listOf(500)) }
+        val sessionId = repository.startSession(GameMode.CLASSIC_RUSH)
+        val beforeFalseStart = prefs.all.toMap()
+
+        repository.recordFalseStart(sessionId)
+
+        assertTrue(prefs.getBoolean("active_session_had_false_start", false))
+        assertEquals(
+            beforeFalseStart.filterKeys { it != "active_session_had_false_start" },
+            prefs.all.filterKeys { it != "active_session_had_false_start" }
+        )
+        val markedDirty = prefs.all.toMap()
+        repository.recordFalseStart(sessionId)
+        assertEquals(markedDirty, prefs.all)
+        val firstRound = repository.recordReaction(sessionId, GameMode.CLASSIC_RUSH, 500, listOf(500))
+        assertEquals(2, firstRound.records.achievements.cleanSessionStreak)
+        assertEquals(2L, firstRound.records.achievements.completedSessions)
+        val afterFirstRound = prefs.all.toMap()
+        RecordsRepository(prefs).recordFalseStart(sessionId)
+        assertEquals(afterFirstRound, prefs.all)
+
+        var completion = firstRound
+        repeat(4) { index ->
+            completion = repository.recordReaction(sessionId, GameMode.CLASSIC_RUSH, 500, List(index + 2) { 500 })
+        }
+        assertEquals(3L, completion.records.achievements.completedSessions)
+        assertEquals(0, completion.records.achievements.cleanSessionStreak)
+        assertFalse(Achievement.CLEAN_SWEEP in completion.records.achievements.unlocked)
+        assertTrue(Achievement.STEADY_HANDS in checkNotNull(completion.reward).newlyUnlocked)
+        assertFalse(prefs.contains("active_session_had_false_start"))
+    }
+
+    @Test
+    fun abandoningADirtySessionPreservesTheStreakAndTheNextSessionStartsClean() {
+        repeat(4) { completeSession(GameMode.QUICK_DRAW, listOf(500)) }
+        val savedProgress = repository.load()
+        val abandonedId = repository.startSession(GameMode.CLASSIC_RUSH)
+        repository.recordFalseStart(abandonedId)
+        repository.recordReaction(abandonedId, GameMode.CLASSIC_RUSH, 500, listOf(500))
+        repository.abandonSession(abandonedId)
+
+        assertEquals(savedProgress.achievements, repository.load().achievements)
+        assertEquals(savedProgress.totalXp, repository.load().totalXp)
+        assertFalse(prefs.contains("active_session_had_false_start"))
+        val nextId = repository.startSession(GameMode.QUICK_DRAW)
+        assertFalse(prefs.getBoolean("active_session_had_false_start", true))
+        val completed = repository.recordReaction(nextId, GameMode.QUICK_DRAW, 500, listOf(500))
+        assertEquals(5L, completed.records.achievements.completedSessions)
+        assertEquals(5, completed.records.achievements.cleanSessionStreak)
+        assertEquals(setOf(Achievement.CLEAN_SWEEP), checkNotNull(completed.reward).newlyUnlocked)
+    }
+
+    @Test
+    fun staleOrBlankFalseStartsCannotDirtyTheCurrentSession() {
+        val oldId = repository.startSession(GameMode.CLASSIC_RUSH)
+        val currentId = repository.startSession(GameMode.QUICK_DRAW)
+        val saved = prefs.all.toMap()
+        listOf(oldId, "", " ", "unknown").forEach { token ->
+            RecordsRepository(prefs).recordFalseStart(token)
+            assertEquals(saved, prefs.all)
+        }
+
+        val completed = repository.recordReaction(currentId, GameMode.QUICK_DRAW, 500, listOf(500))
+        assertEquals(1, completed.records.achievements.cleanSessionStreak)
+        val afterCompletion = prefs.all.toMap()
+        repository.recordFalseStart(currentId)
+        assertEquals(afterCompletion, prefs.all)
+    }
+
+    @Test
+    fun missingOrWronglyTypedFalseStartMetadataCannotAwardACleanSession() {
+        val corruptions: List<(SharedPreferences.Editor) -> Unit> = listOf(
+            { it.remove("active_session_had_false_start") },
+            { it.putString("active_session_had_false_start", "false") },
+            { it.putInt("active_session_had_false_start", 0) }
+        )
+        corruptions.forEach { corrupt ->
+            assertTrue(prefs.edit().clear().putLong("completed_sessions", 4).putInt("clean_session_streak", 4).commit())
+            val sessionId = repository.startSession(GameMode.QUICK_DRAW)
+            val editor = prefs.edit()
+            corrupt(editor)
+            assertTrue(editor.commit())
+
+            val completed = repository.recordReaction(sessionId, GameMode.QUICK_DRAW, 500, listOf(500))
+            assertEquals(5L, completed.records.achievements.completedSessions)
+            assertEquals(0, completed.records.achievements.cleanSessionStreak)
+            assertFalse(Achievement.CLEAN_SWEEP in completed.records.achievements.unlocked)
+        }
+    }
+
+    @Test
+    fun completedSessionMilestonesUnlockAtTheirExactThresholdsWithoutBonusXp() {
+        val milestones = listOf(
+            10L to Achievement.GETTING_STARTED,
+            50L to Achievement.DEDICATED,
+            100L to Achievement.VETERAN
+        )
+        milestones.forEach { (threshold, achievement) ->
+            assertTrue(prefs.edit().clear().putLong("completed_sessions", threshold - 1).commit())
+            val before = repository.load()
+            assertFalse(achievement in before.achievements.unlocked)
+
+            val completed = completeSession(GameMode.QUICK_DRAW, listOf(500), hadFalseStart = true)
+            assertEquals(threshold, completed.records.achievements.completedSessions)
+            assertEquals(setOf(achievement), checkNotNull(completed.reward).newlyUnlocked)
+            assertEquals(10L, completed.records.totalXp)
+            assertEquals(10, checkNotNull(completed.reward).awardedXp)
+        }
+    }
+
+    @Test
+    fun completionUsesTheNewXpLevelForAchievementEvaluation() {
+        assertTrue(prefs.edit().putLong("total_xp", 999).commit())
+
+        val completed = completeSession(GameMode.QUICK_DRAW, listOf(500))
+
+        assertEquals(1_009L, completed.records.totalXp)
+        assertEquals(4, checkNotNull(completed.reward).previousLevel)
+        assertEquals(5, checkNotNull(completed.reward).newLevel)
+        assertEquals(setOf(Achievement.RISING_STAR), checkNotNull(completed.reward).newlyUnlocked)
+        assertEquals(1L, completed.records.achievements.completedSessions)
+    }
+
+    @Test
+    fun migrationRecoversOnlyProvableModeMedalAndLevelAchievements() {
+        assertTrue(prefs.edit()
+            .putInt("best", 100)
+            .putInt("attempts", 10_000)
+            .putInt("record_quick_draw", 199)
+            .putInt("record_classic_rush", 250)
+            .putInt("record_endurance_rush", 320)
+            .putLong("total_xp", 30_000)
+            .commit())
+        val oldValues = prefs.all.toMap()
+
+        val migrated = repository.load()
+
+        val expected = setOf(
+            Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX, Achievement.ELITE_REFLEX,
+            Achievement.RISING_STAR, Achievement.REFLEX_MASTER, Achievement.LEGEND
+        )
+        assertEquals(expected, migrated.achievements.unlocked)
+        assertEquals(0L, migrated.achievements.completedSessions)
+        assertEquals(0, migrated.achievements.cleanSessionStreak)
+        assertEquals(oldValues, prefs.all.filterKeys { it != "unlocked_achievement_ids" })
+        assertFalse(prefs.contains("completed_sessions"))
+        assertFalse(prefs.contains("clean_session_streak"))
+        assertEquals(expected.map { it.name }.toSet(), prefs.getStringSet("unlocked_achievement_ids", null))
+        val afterMigration = prefs.all.toMap()
+        assertEquals(migrated, RecordsRepository(prefs).load())
+        assertEquals(afterMigration, prefs.all)
+    }
+
+    @Test
+    fun migrationDoesNotGuessAchievementsFromLifetimeReactionsOrOverallBest() {
+        assertTrue(prefs.edit().putInt("best", 100).putInt("attempts", 10_000).commit())
+        val saved = prefs.all.toMap()
+
+        val loaded = repository.load()
+
+        assertEquals(AchievementState(), loaded.achievements)
+        assertEquals(saved, prefs.all)
+    }
+
+    @Test
+    fun migrationRecoversStoredCountAndStreakMilestonesWithoutIncrementingThem() {
+        assertTrue(prefs.edit().putLong("completed_sessions", 100).putInt("clean_session_streak", 5).commit())
+
+        val loaded = repository.load()
+
+        assertEquals(100L, loaded.achievements.completedSessions)
+        assertEquals(5, loaded.achievements.cleanSessionStreak)
+        assertEquals(
+            setOf(Achievement.GETTING_STARTED, Achievement.DEDICATED, Achievement.VETERAN, Achievement.CLEAN_SWEEP),
+            loaded.achievements.unlocked
+        )
+        assertEquals(100L, prefs.getLong("completed_sessions", -1))
+        assertEquals(5, prefs.getInt("clean_session_streak", -1))
+    }
+
+    @Test
+    fun corruptAchievementValuesAreSafeAndKnownUnlockedIdsRemainPermanent() {
+        assertTrue(prefs.edit()
+            .putStringSet("unlocked_achievement_ids", setOf("LEGEND", "UNKNOWN_ACHIEVEMENT"))
+            .putLong("completed_sessions", -10)
+            .putInt("clean_session_streak", Int.MAX_VALUE)
+            .commit())
+
+        val loaded = repository.load()
+
+        val implied = setOf(Achievement.RISING_STAR, Achievement.REFLEX_MASTER, Achievement.LEGEND)
+        assertEquals(implied, loaded.achievements.unlocked)
+        assertEquals(0L, loaded.achievements.completedSessions)
+        assertEquals(0, loaded.achievements.cleanSessionStreak)
+        val completed = completeSession(GameMode.QUICK_DRAW, listOf(500))
+        assertEquals(implied, completed.records.achievements.unlocked)
+        assertTrue(checkNotNull(completed.reward).newlyUnlocked.isEmpty())
+        assertEquals(implied.map { it.name }.toSet(), prefs.getStringSet("unlocked_achievement_ids", null))
+    }
+
+    @Test
+    fun wronglyTypedAchievementPreferencesDefaultSafelyAndStreakCannotExceedCompletedCount() {
+        assertTrue(prefs.edit()
+            .putString("unlocked_achievement_ids", "ELITE_REFLEX")
+            .putInt("completed_sessions", 50)
+            .putLong("clean_session_streak", 5)
+            .commit())
+        assertEquals(AchievementState(), repository.load().achievements)
+
+        assertTrue(prefs.edit().putLong("completed_sessions", 2).putInt("clean_session_streak", Int.MAX_VALUE).commit())
+        val clamped = repository.load().achievements
+        assertEquals(2L, clamped.completedSessions)
+        assertEquals(2, clamped.cleanSessionStreak)
+        assertFalse(Achievement.CLEAN_SWEEP in clamped.unlocked)
+    }
+
+    @Test
+    fun achievementCountersSaturateAndDirtyCompletionCanResetASaturatedStreak() {
+        assertTrue(prefs.edit()
+            .putLong("completed_sessions", Long.MAX_VALUE)
+            .putInt("clean_session_streak", Int.MAX_VALUE)
+            .commit())
+        repository.load()
+
+        val clean = completeSession(GameMode.QUICK_DRAW, listOf(500))
+        assertEquals(Long.MAX_VALUE, clean.records.achievements.completedSessions)
+        assertEquals(Int.MAX_VALUE, clean.records.achievements.cleanSessionStreak)
+        val dirty = completeSession(GameMode.QUICK_DRAW, listOf(500), hadFalseStart = true)
+        assertEquals(Long.MAX_VALUE, dirty.records.achievements.completedSessions)
+        assertEquals(0, dirty.records.achievements.cleanSessionStreak)
+        assertTrue(Achievement.CLEAN_SWEEP in dirty.records.achievements.unlocked)
+        assertTrue(checkNotNull(dirty.reward).newlyUnlocked.isEmpty())
+    }
+
+    private fun completeSession(mode: GameMode, scores: List<Int>, hadFalseStart: Boolean = false): ReactionUpdate {
         require(scores.size == mode.rounds)
         val sessionId = repository.startSession(mode)
+        if (hadFalseStart) repository.recordFalseStart(sessionId)
         val updates = scores.indices.map { index ->
             repository.recordReaction(sessionId, mode, scores[index], scores.take(index + 1))
         }

@@ -40,7 +40,8 @@ class MainActivity : ComponentActivity() {
 
 enum class AppScreen {
     HOME,
-    GAME
+    GAME,
+    ACHIEVEMENTS
 }
 
 enum class GameState {
@@ -67,6 +68,7 @@ fun ReactionRushApp() {
         AppScreen.HOME -> {
             HomeScreen(
                 records = records,
+                onAchievementsSelected = { screen = AppScreen.ACHIEVEMENTS },
                 onModeSelected = { mode ->
                     selectedMode = mode
                     screen = AppScreen.GAME
@@ -80,6 +82,7 @@ fun ReactionRushApp() {
                 records = records,
                 onStartSession = recordsRepository::startSession,
                 onAbandonSession = recordsRepository::abandonSession,
+                onFalseStart = recordsRepository::recordFalseStart,
                 onReaction = { sessionId, mode, score, scores ->
                     val update = recordsRepository.recordReaction(sessionId, mode, score, scores)
                     records = update.records
@@ -90,12 +93,20 @@ fun ReactionRushApp() {
                 }
             )
         }
+
+        AppScreen.ACHIEVEMENTS -> {
+            AchievementsScreen(
+                records = records,
+                onBackHome = { screen = AppScreen.HOME }
+            )
+        }
     }
 }
 
 @Composable
 private fun HomeScreen(
     records: PersonalRecords,
+    onAchievementsSelected: () -> Unit,
     onModeSelected: (GameMode) -> Unit
 ) {
     Surface(
@@ -155,6 +166,19 @@ private fun HomeScreen(
             Spacer(Modifier.height(28.dp))
 
             PlayerProgressCard(records.totalXp)
+
+            Spacer(Modifier.height(12.dp))
+
+            OutlinedButton(
+                onClick = onAchievementsSelected,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF62E6B5))
+            ) {
+                Text(
+                    "ACHIEVEMENTS · ${records.achievements.unlocked.size} / ${Achievement.entries.size}",
+                    fontWeight = FontWeight.Bold
+                )
+            }
 
             Spacer(Modifier.height(24.dp))
 
@@ -283,6 +307,7 @@ private fun GameScreen(
     records: PersonalRecords,
     onStartSession: (GameMode) -> String,
     onAbandonSession: (String) -> Unit,
+    onFalseStart: (String) -> Unit,
     onReaction: (String, GameMode, Int, List<Int>) -> ReactionUpdate,
     onBackHome: () -> Unit
 ) {
@@ -460,6 +485,7 @@ private fun GameScreen(
                             }
 
                             GameState.WAITING -> {
+                                onFalseStart(sessionId)
                                 falseStarts++
                                 state = GameState.FALSE_START
                                 buzz(90)
@@ -597,6 +623,15 @@ private fun GameScreen(
                         )
                     }
 
+                    sessionReward?.let { reward ->
+                        if (reward.newlyUnlocked.isNotEmpty() && (
+                            state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                        )) {
+                            Spacer(Modifier.height(14.dp))
+                            AchievementUnlockFeedback(reward.newlyUnlocked)
+                        }
+                    }
+
                     if (state == GameState.SESSION_RESULT) {
                         Spacer(Modifier.height(26.dp))
 
@@ -637,6 +672,11 @@ private fun GameScreen(
                             Spacer(Modifier.height(18.dp))
                             PlayerProgressCard(records.totalXp)
                             Spacer(Modifier.height(18.dp))
+
+                            if (reward.newlyUnlocked.isNotEmpty()) {
+                                NewAchievementsCard(reward.newlyUnlocked)
+                                Spacer(Modifier.height(18.dp))
+                            }
                         }
 
                         Row(
