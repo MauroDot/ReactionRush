@@ -17,6 +17,10 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
             gradle-version: '8.13'
+      - name: Test scoring and persistence
+        run: gradle :app:testDebugUnitTest
+      - name: Lint debug build
+        run: gradle :app:lintDebug
       - name: Build debug APK
         run: gradle :app:assembleDebug
       - uses: actions/upload-artifact@v4
