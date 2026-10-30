@@ -128,6 +128,46 @@ The RR-004B asynchronous-write and lifecycle limits still apply: abrupt failure 
 - Cross session counts 10, 50, and 100 and levels 5, 10, and 25. Verify each milestone unlocks once after the relevant saved facts exist.
 - Retap results, navigate away, restart, and reopen Achievements. Verify no duplicate counts/unlocks, persistent XP and records, and readable results on a small screen.
 
+## RR-004D: Session history and player statistics
+
+Home opens Statistics, which separates saved player totals from retained-history metrics. It shows total completed sessions, successful reactions, global and per-mode records, XP, level, clean streak, achievement count, mode completion totals, recent averages/trends, and a newest-first session list. Each session opens a scrollable detail view with its completion time, all round scores, best time, rounded average, spread, false-start count, actual credited XP, and medal. Home and system Back navigation work from both list and detail views.
+
+### Storage and completion integrity
+
+History uses the existing `reaction_rush` preferences, under `session_history`, as JSON with a `version: 1` wrapper and a `sessions` array. Entries contain the session token ID, mode, completion timestamp in epoch milliseconds, round scores, best/average/spread, false-start count, earned XP, and medal. The list retains at most 100 distinct completed sessions. New completions prepend entries; array order remains completion order even if the device clock moves backward. Dates display in the device's locale and time zone.
+
+Only an accepted final reaction creates history. The repository's existing token and round-sequence checks reject duplicate or stale callbacks. One preference edit saves the session entry, mode counts, records, XP, achievements, and token consumption together. Abandoned or incomplete sessions never enter history, although their valid reactions still contribute to the preexisting lifetime reaction count and global best.
+
+`active_session_false_start_count` extends the existing false-start flag with a saturated integer count. Each failure increments it; retries retain it, and completion/abandonment clears it. Missing or contradictory active-session metadata is treated conservatively as dirty with at least one false start. Normal sessions retain their exact count. Historical XP is the actual credited amount, including reduced or zero credit at the XP storage limit.
+
+Per-mode totals use nonnegative Long values under `completed_sessions_quick_draw`, `completed_sessions_classic_rush`, and `completed_sessions_endurance_rush`. These counters keep growing after old history is pruned. Missing, invalid, or too-low mode counters recover a minimum from valid retained entries. The next completion persists those recovered minimums, including other modes, so subsequent pruning cannot erase them. Counter overflow saturates rather than wrapping.
+
+### Statistics rules and migration
+
+- **Saved player totals:** Existing lifetime successful reactions, global best, personal records, XP, level, clean streak, and unlocked achievements retain their previous definitions. The completed-session total remains RR-004C's saved count; earlier sessions before that counter existed cannot be reconstructed.
+- **Mode completion totals:** Tracking begins with RR-004D. Old saves start with no history and zero per-mode counts; earlier unknown mode totals are not guessed from XP or reaction counts. The screen explains this cutoff.
+- **Retained average:** Sum all valid individual round times in retained completed sessions, divide by the number of those reactions, then round to the nearest whole millisecond. Every reaction has equal weight, so a ten-round Endurance session contributes ten observations. False starts and abandoned-session reactions are excluded. Empty history displays a dash.
+- **Recent trends:** Calculate separately for each mode only when at least ten of that mode's sessions are retained. Compare the mean reaction time across the latest five sessions against the previous five. A lower recent average is faster; equal displayed averages are unchanged. These comparisons use retained history only, never mixed-mode averages.
+
+### Recovery and storage limits
+
+The decoder accepts at most 200,000 serialized characters and limits nesting and ID length. Strict streaming JSON validation enforces the nesting bound before parsing objects. It preserves valid sibling entries when individual entries are malformed, including out-of-range numeric fields, ignores duplicate IDs after the first, and retains only the first 100 valid distinct entries. Unknown schema versions or wholly unreadable payloads load as unavailable history without changing saved player totals.
+
+Core mode, ID, timestamp, scores, false-start count, and XP fields must be valid. Best time, rounded average, spread, and medal are recomputed from valid scores, repairing inconsistent derived fields. The UI marks history that needed recovery. The next valid completion writes canonical bounded history and clears that payload warning; discarded entries cannot be reconstructed. XP and achievements are never re-awarded from decoded history.
+
+History is encoded only for completed sessions, and decoded data is cached while its stored value is unchanged. Load, partial reactions, false starts, and rejected callbacks do not serialize history. Existing per-reaction preference updates still rewrite Android's containing XML file, including the bounded history string; this tradeoff preserves the single-edit completion architecture without adding a database or dependency. The earlier asynchronous-write and active-game lifecycle limitations still apply.
+
+### Manual statistics acceptance checklist
+
+- Upgrade an existing save; verify preserved player totals and records, empty history, and clearly explained mode-count tracking scope.
+- Complete each mode. Verify newest-first rows, completion time, every round score, best/average/spread, false starts, XP, and medal in details.
+- Make multiple false starts, then finish. Verify the exact count in history and unchanged normal XP rules. Abandon a partial session and confirm no history or completed-mode increment.
+- Retap results, navigate, reopen Statistics, and restart the app. Verify each session is recorded once and both header and system Back return to the expected screen.
+- With QA data, cross 100 completed sessions. Verify only the newest 100 remain, while saved session and mode totals retain older completions.
+- Verify the retained average against individual round scores, and compare faster/slower/unchanged trends after ten sessions in one mode.
+- With a QA save containing malformed history entries, confirm valid entries remain visible, the recovery notice appears, and all existing XP, records, and achievements remain intact.
+- Check the full Statistics page and ten-round session details on a small physical device, including large font settings and accessibility reading order.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
@@ -138,7 +178,7 @@ Open the project in Android Studio and run it on a device, or build with the Gra
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The unit tests cover record isolation, completed-session scoring and rounding, strict improvements, lifetime save compatibility, XP formulas and caps, medal and level boundaries, achievement conditions and migration, clean streaks, overflow, invalid persisted values, exactly-once completion, and preference-file persistence.
+The unit tests cover records, XP, levels, achievements, clean streaks, history capture/retention/recovery, weighted statistics, same-mode trends, overflow, exactly-once completion, migration, and preference-file persistence.
 
 With an Android emulator or device connected, run gameplay checks with:
 
@@ -146,4 +186,4 @@ With an Android emulator or device connected, run gameplay checks with:
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-The gameplay tests cover false starts, unfinished sessions, all three modes, record/progression/achievement feedback, the achievement catalog, clean streaks, migration, replay, Home updates, and saved state after activity recreation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.
+The gameplay tests cover all three modes, existing records/progression/achievements, Statistics and session details, trends, false starts, unfinished sessions, recovery, migration, navigation, and saved state after activity recreation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.
