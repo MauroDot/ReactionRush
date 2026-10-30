@@ -2,7 +2,9 @@ package com.maurointeractive.reactionrush
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
@@ -76,6 +78,7 @@ class PersonalRecordsGameplayTest {
         assertEquals(0, prefs.getInt("attempts", 0))
         assertFalse(prefs.contains("best"))
         assertFalse(prefs.contains(GameMode.QUICK_DRAW.recordKey))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
         recordBanner().assertDoesNotExist()
     }
 
@@ -87,6 +90,7 @@ class PersonalRecordsGameplayTest {
         assertEquals(1, prefs.getInt("attempts", 0))
         assertTrue(prefs.getInt("best", 0) > 0)
         assertFalse(prefs.contains(GameMode.CLASSIC_RUSH.recordKey))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
         recordBanner().assertDoesNotExist()
 
         goHome()
@@ -95,6 +99,7 @@ class PersonalRecordsGameplayTest {
         settle()
         assertEquals(1, prefs.getInt("attempts", 0))
         assertFalse(prefs.contains(GameMode.CLASSIC_RUSH.recordKey))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
     }
 
     @Test
@@ -149,8 +154,7 @@ class PersonalRecordsGameplayTest {
             compose.onNodeWithText("RUSH COMPLETE").assertExists()
             recordBanner().assertExists()
             // The long Endurance result remains reachable within its scroll area.
-            compose.onNodeWithText("Round ${mode.rounds}: ${scores.last()} ms", useUnmergedTree = true)
-                .performScrollTo().assertExists()
+            scrollToText("Round ${mode.rounds}: ${scores.last()} ms")
             clickGameText("Tap to play this mode again.")
             recordBanner().assertDoesNotExist()
             goHome()
@@ -162,8 +166,165 @@ class PersonalRecordsGameplayTest {
         assertFalse(prefs.contains(GameMode.QUICK_DRAW.recordKey))
     }
 
+    @Test
+    fun completedModesAwardExactXpAndHomeProgressSurvivesRecreation() {
+        var totalXp = 0L
+        assertProgressCard(totalXp)
+
+        for (mode in GameMode.entries) {
+            val scores = completeSession(mode, totalXp)
+            val expectedReward = PlayerProgression.reward(mode, scores)
+            totalXp += expectedReward.totalXp
+            assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+
+            clickGameText("Round complete. Tap for results.")
+            scrollToText("+${expectedReward.totalXp} XP")
+            scrollToText("MEDAL: ${PlayerProgression.medal(scores.average().roundToInt()).title}")
+            assertProgressCard(totalXp)
+            assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+
+            clickGameText("Tap to play this mode again.")
+            goHome()
+            assertProgressCard(totalXp)
+            compose.activityRule.scenario.recreate()
+            settle()
+            assertProgressCard(totalXp)
+            assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        }
+    }
+
+    @Test
+    fun falseStartRetryEarnsNormalXpAndNavigationNeverRepeatsTheAward() {
+        val mode = GameMode.QUICK_DRAW
+        selectMode(mode)
+        clickGameText("Tap to begin.")
+        clickGameText("Don't tap until it turns green.")
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
+        assertEquals(0, prefs.getInt("attempts", 0))
+
+        clickGameText("False start! This round doesn't count.")
+        reactWhenGreen()
+        val firstXp = PlayerProgression.reward(mode, listOf(displayedRoundScore())).totalXp
+        assertEquals(firstXp.toLong(), prefs.getLong("total_xp", 0L))
+        assertEquals(1, prefs.getInt("attempts", 0))
+        clickGameText("Round complete. Tap for results.")
+        compose.onNodeWithText("+$firstXp XP").assertExists()
+        assertEquals(firstXp.toLong(), prefs.getLong("total_xp", 0L))
+
+        // Further result-area taps reset and start another session, but award
+        // nothing until another successful final reaction is recorded.
+        clickGameText("Tap to play this mode again.")
+        compose.onNodeWithText("+$firstXp XP").assertDoesNotExist()
+        clickGameText("Tap to begin.")
+        goHome()
+        assertProgressCard(firstXp.toLong())
+
+        val replayScores = completeSession(mode, firstXp.toLong())
+        val replayXp = PlayerProgression.reward(mode, replayScores).totalXp
+        val totalXp = firstXp.toLong() + replayXp
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        assertEquals(2, prefs.getInt("attempts", 0))
+        clickGameText("Round complete. Tap for results.")
+        clickGameText("Tap to play this mode again.")
+        goHome()
+        assertProgressCard(totalXp)
+        selectMode(mode)
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        compose.onNodeWithText("+$replayXp XP").assertDoesNotExist()
+    }
+
+    @Test
+    fun levelUpFeedbackClearsForReplayWhileProgressPersists() {
+        assertTrue(prefs.edit().putLong("total_xp", 99L).commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        assertProgressCard(99L)
+
+        val mode = GameMode.QUICK_DRAW
+        val scores = completeSession(mode, 99L)
+        val totalXp = 99L + PlayerProgression.reward(mode, scores).totalXp
+        val expectedLevel = PlayerProgression.levelProgress(totalXp).level
+        assertTrue(expectedLevel > 1)
+        compose.onNodeWithText("LEVEL UP! LEVEL $expectedLevel", useUnmergedTree = true)
+            .assertIsDisplayed()
+        clickGameText("Round complete. Tap for results.")
+        scrollToText("LEVEL UP! LEVEL $expectedLevel")
+        assertProgressCard(totalXp)
+
+        clickGameText("Tap to play this mode again.")
+        compose.onNodeWithText("LEVEL UP!", substring = true).assertDoesNotExist()
+        goHome()
+        assertProgressCard(totalXp)
+        compose.activityRule.scenario.recreate()
+        settle()
+        assertProgressCard(totalXp)
+        selectMode(mode)
+        compose.onNodeWithText("LEVEL UP!", substring = true).assertDoesNotExist()
+    }
+
+    @Test
+    fun invalidXpLoadsSafelyAndCappedRewardsShowOnlyCreditedXp() {
+        assertTrue(prefs.edit().putString("total_xp", "invalid").commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        assertProgressCard(0L)
+        assertTrue(prefs.edit().putLong("total_xp", -10L).commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        assertProgressCard(0L)
+
+        assertTrue(prefs.edit().putLong("total_xp", Long.MAX_VALUE - 1L).commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        assertProgressCard(Long.MAX_VALUE - 1L)
+        completeSession(GameMode.QUICK_DRAW, Long.MAX_VALUE - 1L)
+        assertEquals(Long.MAX_VALUE, prefs.getLong("total_xp", 0L))
+        clickGameText("Round complete. Tap for results.")
+        scrollToText("+1 XP")
+        scrollToText("XP limit reached")
+        assertProgressCard(Long.MAX_VALUE)
+
+        clickGameText("Tap to play this mode again.")
+        goHome()
+        completeSession(GameMode.QUICK_DRAW, Long.MAX_VALUE)
+        clickGameText("Round complete. Tap for results.")
+        scrollToText("+0 XP")
+        scrollToText("XP limit reached")
+        assertEquals(Long.MAX_VALUE, prefs.getLong("total_xp", 0L))
+        assertProgressCard(Long.MAX_VALUE)
+    }
+
+    private fun completeSession(mode: GameMode, previousXp: Long): List<Int> {
+        selectMode(mode)
+        clickGameText("Tap to begin.")
+        val scores = mutableListOf<Int>()
+        repeat(mode.rounds) { round ->
+            reactWhenGreen()
+            scores += displayedRoundScore()
+            if (round < mode.rounds - 1) {
+                assertEquals(previousXp, prefs.getLong("total_xp", 0L))
+                clickGameText("Round ${round + 1} complete. Tap for the next round.")
+            }
+        }
+        return scores
+    }
+
+    private fun assertProgressCard(totalXp: Long) {
+        val progress = PlayerProgression.levelProgress(totalXp)
+        compose.onNodeWithText("LEVEL ${progress.level}").assertExists()
+        compose.onNodeWithText("TOTAL XP: $totalXp").assertExists()
+        scrollToText(if (progress.isMaxLevel) "MAX LEVEL" else
+            "${progress.xpIntoLevel} / ${progress.xpToNextLevel} XP TO LEVEL ${progress.level + 1}")
+        val bar = compose.onNode(
+            SemanticsMatcher.keyIsDefined(SemanticsProperties.ProgressBarRangeInfo),
+            useUnmergedTree = true
+        ).fetchSemanticsNode().config[SemanticsProperties.ProgressBarRangeInfo]
+        assertEquals(progress.fraction, bar.current, 0.0001f)
+        assertEquals(0f..1f, bar.range)
+    }
+
     private fun selectMode(mode: GameMode) {
-        compose.onNodeWithText(mode.title).performScrollTo()
+        scrollToText(mode.title)
         compose.onNode(
             hasClickAction() and hasAnyDescendant(hasText(mode.title)),
             useUnmergedTree = true
@@ -209,6 +370,18 @@ class PersonalRecordsGameplayTest {
     private fun settle() {
         compose.mainClock.advanceTimeByFrame()
         compose.waitForIdle()
+    }
+
+    private fun scrollToText(text: String) {
+        // Scrolling can animate when a result extends beyond a small display.
+        // Keep reaction waits virtual, but let these UI-only animations finish.
+        compose.mainClock.autoAdvance = true
+        try {
+            compose.onNodeWithText(text, useUnmergedTree = true)
+                .performScrollTo().assertIsDisplayed()
+        } finally {
+            compose.mainClock.autoAdvance = false
+        }
     }
 
 }
