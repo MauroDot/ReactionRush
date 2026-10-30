@@ -71,6 +71,63 @@ XP, session-token metadata, and personal records share the existing `reaction_ru
 - Confirm tied/slower performances still earn session XP without replacing personal records or displaying a new-record announcement.
 - On a small screen, scroll Home and the full Endurance results. Confirm XP, medals, record feedback, and all round scores remain reachable.
 
+## RR-004C: Achievements and milestones
+
+Home opens a scrollable Achievements screen showing all 12 definitions, explicit locked/unlocked labels, measurable progress, and an unlocked total. The final reaction and session summary announce new unlocks without opening a modal or interrupting play; the results also list their names. Achievements do not add XP or change scoring, medals, personal records, or the RR-004B reward formulas.
+
+| Persistent ID | Name | Unlock condition |
+| --- | --- | --- |
+| `GOLD_REFLEX` | Gold Reflex | Gold or better on a completed session |
+| `PLATINUM_REFLEX` | Platinum Reflex | Platinum or better on a completed session |
+| `ELITE_REFLEX` | Elite Reflex | Elite on a completed session |
+| `STEADY_HANDS` | Steady Hands | Classic Rush reaction spread at most 40 ms |
+| `IRON_FOCUS` | Iron Focus | Endurance Rush reaction spread at most 60 ms |
+| `CLEAN_SWEEP` | Clean Sweep | Five consecutive completed sessions with no false starts |
+| `GETTING_STARTED` | Getting Started | 10 completed sessions |
+| `DEDICATED` | Dedicated | 50 completed sessions |
+| `VETERAN` | Veteran | 100 completed sessions |
+| `RISING_STAR` | Rising Star | Reach level 5 |
+| `REFLEX_MASTER` | Reflex Master | Reach level 10 |
+| `LEGEND` | Legend | Reach level 25 |
+
+### Completion and streak algorithm
+
+`Achievements` contains the pure unlock/progress calculations. `RecordsRepository` accepts only the next successful round of the current session token, preserving RR-004B's duplicate protection. False starts set a persisted session flag; they never increment completed sessions, reset the clean streak, award XP, or unlock achievements by themselves.
+
+Only the final accepted reaction increments completed sessions. A session whose false-start flag is false increments the clean streak; a session with any earlier false start resets it to zero, even after a successful retry. Abandoning a session leaves the previous completed count and streak unchanged. Spread is the slowest minus fastest valid reaction, excluding false starts.
+
+Unlock evaluation uses the completed-session medal, mode-specific spread, updated counters, and the level after awarding that session's normal XP. Higher medals unlock all lower reflex tiers. Earned IDs remain permanent; newly unlocked IDs are the difference between the resulting and previous sets. Results navigation, repeated callbacks, stale tokens, and restart cannot count the same completion twice.
+
+### Persistence and migration
+
+The existing `reaction_rush` preferences now also hold:
+
+| Key | Type | Meaning |
+| --- | --- | --- |
+| `unlocked_achievement_ids` | String set | Recognized permanent achievement IDs |
+| `completed_sessions` | Long | Successful full sessions tracked since RR-004C |
+| `clean_session_streak` | Int | Consecutive clean completed sessions |
+| `active_session_had_false_start` | Boolean | Whether the current session has failed any round |
+
+The final reaction saves achievement IDs, counters, XP, any personal record, and session-token consumption in one preference edit under the repository's existing lock. Session start initializes the false-start flag; completion or abandonment removes it with the other active-session metadata. A missing or malformed flag cannot establish a clean session.
+
+On load, valid existing per-mode records can prove reflex-medal achievements, and existing XP can prove level milestones. Those IDs are reconciled and persisted without awarding XP or incrementing counters. Older saves cannot establish historical completion counts, spreads, or clean streaks, so these start at zero. Reconciliation can also recover missing lower-tier IDs implied by an already earned higher-tier achievement, without inventing numeric history.
+
+Unknown or malformed saved IDs are ignored safely. Negative or wrongly typed counters load as zero, streaks cannot exceed completed sessions, and counters saturate instead of overflowing. Unlocks are never revoked when a current streak resets or numeric history needs recovery. For unlocked measurable achievements, the UI shows their target as completed; the screen separately shows the current clean streak.
+
+The RR-004B asynchronous-write and lifecycle limits still apply: abrupt failure before disk persistence can lose the latest update, and active games are not resumed after activity recreation or process death. All achievement evaluation and storage work offline; no permissions, network services, or dependencies were added.
+
+### Manual achievement acceptance checklist
+
+- Upgrade a save with personal records and XP. Verify only provable reflex/level achievements unlock, old statistics remain intact, and untracked session counts start at zero.
+- Open Achievements from Home. Scroll through all 12 names and descriptions, verify locked/unlocked text, progress, total unlocked, and both Home and system Back navigation.
+- Earn Gold, Platinum, and Elite; verify each higher medal includes lower reflex unlocks and no achievement is announced twice.
+- Complete Classic with spreads 40 and 41 ms and Endurance with 60 and 61 ms; verify the inclusive thresholds use valid reactions only.
+- Complete five clean sessions. Verify Clean Sweep, then complete a dirty session: the current streak resets while the unlock remains permanent.
+- False-start and abandon a session; verify the current streak, session count, XP, and unlocked IDs remain unchanged. Retry a false start to completion and verify that session is counted but not clean.
+- Cross session counts 10, 50, and 100 and levels 5, 10, and 25. Verify each milestone unlocks once after the relevant saved facts exist.
+- Retap results, navigate away, restart, and reopen Achievements. Verify no duplicate counts/unlocks, persistent XP and records, and readable results on a small screen.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
@@ -81,7 +138,7 @@ Open the project in Android Studio and run it on a device, or build with the Gra
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The unit tests cover record isolation, completed-session scoring and rounding, strict improvements, lifetime save compatibility, XP formulas and caps, medal and level boundaries, overflow, invalid persisted values, exactly-once rewards, and preference-file persistence.
+The unit tests cover record isolation, completed-session scoring and rounding, strict improvements, lifetime save compatibility, XP formulas and caps, medal and level boundaries, achievement conditions and migration, clean streaks, overflow, invalid persisted values, exactly-once completion, and preference-file persistence.
 
 With an Android emulator or device connected, run gameplay checks with:
 
@@ -89,4 +146,4 @@ With an Android emulator or device connected, run gameplay checks with:
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-The gameplay tests cover false starts, unfinished sessions, all three modes, record and progression feedback, replay, Home updates, and saved records after activity recreation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.
+The gameplay tests cover false starts, unfinished sessions, all three modes, record/progression/achievement feedback, the achievement catalog, clean streaks, migration, replay, Home updates, and saved state after activity recreation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.

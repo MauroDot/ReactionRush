@@ -8,7 +8,8 @@ data class PersonalRecords(
     val lifetimeBestMs: Int = 0,
     val lifetimeReactions: Int = 0,
     val modeBestMs: Map<GameMode, Int> = emptyMap(),
-    val totalXp: Long = 0
+    val totalXp: Long = 0,
+    val achievements: AchievementState = AchievementState()
 ) {
     fun bestFor(mode: GameMode): Int = modeBestMs[mode] ?: 0
 }
@@ -24,11 +25,19 @@ data class SessionReward(
     val awardedXp: Int,
     val medal: PerformanceMedal,
     val previousLevel: Int,
-    val newLevel: Int
+    val newLevel: Int,
+    val newlyUnlocked: Set<Achievement> = emptySet()
 )
 
 class RecordsRepository(private val prefs: SharedPreferences) {
-    fun load(): PersonalRecords = synchronized(prefs) { recordsFrom(prefs.all) }
+    fun load(): PersonalRecords = synchronized(prefs) {
+        val records = recordsFrom(prefs.all)
+        val reconciled = reconcileAchievements(records)
+        if (reconciled.unlocked != records.achievements.unlocked) {
+            prefs.edit { putStringSet(UNLOCKED_ACHIEVEMENT_IDS, reconciled.unlocked.map { it.name }.toSet()) }
+        }
+        records.copy(achievements = reconciled)
+    }
 
     private fun recordsFrom(saved: Map<String, *>): PersonalRecords = PersonalRecords(
         // Keep the original keys: an upgrade must not reset lifetime statistics.
@@ -36,8 +45,26 @@ class RecordsRepository(private val prefs: SharedPreferences) {
         lifetimeReactions = saved.nonNegativeInt("attempts"),
         modeBestMs = GameMode.entries.associateWith { saved.nonNegativeInt(it.recordKey) },
         // XP is written as Long. A missing, negative, or wrongly typed value starts at zero.
-        totalXp = (saved[TOTAL_XP] as? Long)?.coerceAtLeast(0L) ?: 0L
+        totalXp = (saved[TOTAL_XP] as? Long)?.coerceAtLeast(0L) ?: 0L,
+        achievements = achievementsFrom(saved)
     )
+
+    private fun achievementsFrom(saved: Map<String, *>): AchievementState {
+        val storedIds = saved[UNLOCKED_ACHIEVEMENT_IDS] as? Set<*> ?: emptySet<Any?>()
+        val completed = (saved[COMPLETED_SESSIONS] as? Long)?.coerceAtLeast(0L) ?: 0L
+        return AchievementState(
+            unlocked = Achievement.entries.filterTo(mutableSetOf()) { it.name in storedIds },
+            completedSessions = completed,
+            cleanSessionStreak = minOf(saved.nonNegativeInt(CLEAN_SESSION_STREAK).toLong(), completed).toInt()
+        )
+    }
+
+    private fun reconcileAchievements(records: PersonalRecords): AchievementState =
+        Achievements.reconcile(
+            records.achievements,
+            PlayerProgression.levelProgress(records.totalXp).level,
+            records.modeBestMs
+        ).state
 
     /** Replaces any abandoned session; starting a session never awards XP. */
     fun startSession(mode: GameMode): String = synchronized(prefs) {
@@ -46,6 +73,7 @@ class RecordsRepository(private val prefs: SharedPreferences) {
             putString(ACTIVE_SESSION_ID, sessionId)
             putString(ACTIVE_SESSION_MODE, mode.name)
             putInt(ACTIVE_SESSION_ROUNDS, 0)
+            putBoolean(ACTIVE_SESSION_HAD_FALSE_START, false)
         }
         sessionId
     }
@@ -60,7 +88,21 @@ class RecordsRepository(private val prefs: SharedPreferences) {
                 remove(ACTIVE_SESSION_ID)
                 remove(ACTIVE_SESSION_MODE)
                 remove(ACTIVE_SESSION_ROUNDS)
+                remove(ACTIVE_SESSION_HAD_FALSE_START)
             }
+        }
+    }
+
+    /** Marks the current session dirty; a false start itself never changes earned progress. */
+    fun recordFalseStart(sessionId: String) {
+        synchronized(prefs) {
+            val saved = prefs.all
+            if (sessionId.isBlank() || saved[ACTIVE_SESSION_ID] != sessionId ||
+                saved[ACTIVE_SESSION_HAD_FALSE_START] == true
+            ) {
+                return@synchronized
+            }
+            prefs.edit { putBoolean(ACTIVE_SESSION_HAD_FALSE_START, true) }
         }
     }
 
@@ -101,12 +143,22 @@ class RecordsRepository(private val prefs: SharedPreferences) {
                 PlayerProgression.reward(mode, sessionScores) else null
             val totalXp = if (earnedXp != null)
                 PlayerProgression.addXp(previous.totalXp, earnedXp.totalXp) else previous.totalXp
+            val newLevel = PlayerProgression.levelProgress(totalXp).level
+            val achievementUpdate = if (earnedXp != null) Achievements.completeSession(
+                previous = reconcileAchievements(previous),
+                mode = mode,
+                scores = sessionScores,
+                // Legacy or malformed metadata cannot establish that a session was clean.
+                hadFalseStart = saved[ACTIVE_SESSION_HAD_FALSE_START] as? Boolean ?: true,
+                playerLevel = newLevel
+            ) else null
             val reward = if (earnedXp != null) SessionReward(
                 xp = earnedXp,
                 awardedXp = (totalXp - previous.totalXp).toInt(),
                 medal = PlayerProgression.medal(checkNotNull(sessionScore)),
                 previousLevel = PlayerProgression.levelProgress(previous.totalXp).level,
-                newLevel = PlayerProgression.levelProgress(totalXp).level
+                newLevel = newLevel,
+                newlyUnlocked = checkNotNull(achievementUpdate).newlyUnlocked
             ) else null
             val updated = previous.copy(
                 lifetimeBestMs = lifetimeBest,
@@ -115,7 +167,8 @@ class RecordsRepository(private val prefs: SharedPreferences) {
                 modeBestMs = if (isNewRecord)
                     previous.modeBestMs + (mode to checkNotNull(sessionScore))
                 else previous.modeBestMs,
-                totalXp = totalXp
+                totalXp = totalXp,
+                achievements = achievementUpdate?.state ?: previous.achievements
             )
 
             // Completion consumes the token in the same edit as its record and reward.
@@ -125,9 +178,16 @@ class RecordsRepository(private val prefs: SharedPreferences) {
                 if (isNewRecord) putInt(mode.recordKey, checkNotNull(sessionScore))
                 if (reward != null) {
                     putLong(TOTAL_XP, totalXp)
+                    putStringSet(
+                        UNLOCKED_ACHIEVEMENT_IDS,
+                        updated.achievements.unlocked.map { it.name }.toSet()
+                    )
+                    putLong(COMPLETED_SESSIONS, updated.achievements.completedSessions)
+                    putInt(CLEAN_SESSION_STREAK, updated.achievements.cleanSessionStreak)
                     remove(ACTIVE_SESSION_ID)
                     remove(ACTIVE_SESSION_MODE)
                     remove(ACTIVE_SESSION_ROUNDS)
+                    remove(ACTIVE_SESSION_HAD_FALSE_START)
                 } else {
                     putInt(ACTIVE_SESSION_ROUNDS, sessionScores.size)
                 }
@@ -142,8 +202,12 @@ class RecordsRepository(private val prefs: SharedPreferences) {
 
     private companion object {
         const val TOTAL_XP = "total_xp"
+        const val UNLOCKED_ACHIEVEMENT_IDS = "unlocked_achievement_ids"
+        const val COMPLETED_SESSIONS = "completed_sessions"
+        const val CLEAN_SESSION_STREAK = "clean_session_streak"
         const val ACTIVE_SESSION_ID = "active_session_id"
         const val ACTIVE_SESSION_MODE = "active_session_mode"
         const val ACTIVE_SESSION_ROUNDS = "active_session_rounds"
+        const val ACTIVE_SESSION_HAD_FALSE_START = "active_session_had_false_start"
     }
 }

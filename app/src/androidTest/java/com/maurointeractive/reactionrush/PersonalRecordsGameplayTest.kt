@@ -91,6 +91,9 @@ class PersonalRecordsGameplayTest {
         assertTrue(prefs.getInt("best", 0) > 0)
         assertFalse(prefs.contains(GameMode.CLASSIC_RUSH.recordKey))
         assertEquals(0L, prefs.getLong("total_xp", 0L))
+        assertEquals(0L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        assertTrue(savedAchievementIds().isEmpty())
         recordBanner().assertDoesNotExist()
 
         goHome()
@@ -176,6 +179,18 @@ class PersonalRecordsGameplayTest {
             val expectedReward = PlayerProgression.reward(mode, scores)
             totalXp += expectedReward.totalXp
             assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+            assertEquals(mode.ordinal + 1L, prefs.getLong("completed_sessions", 0L))
+            assertEquals(mode.ordinal + 1, prefs.getInt("clean_session_streak", 0))
+            val spread = scores.maxOrNull()!! - scores.minOrNull()!!
+            when (mode) {
+                GameMode.CLASSIC_RUSH -> assertEquals(
+                    spread <= 40, Achievement.STEADY_HANDS.name in savedAchievementIds()
+                )
+                GameMode.ENDURANCE_RUSH -> assertEquals(
+                    spread <= 60, Achievement.IRON_FOCUS.name in savedAchievementIds()
+                )
+                else -> Unit
+            }
 
             clickGameText("Round complete. Tap for results.")
             scrollToText("+${expectedReward.totalXp} XP")
@@ -292,6 +307,208 @@ class PersonalRecordsGameplayTest {
         scrollToText("XP limit reached")
         assertEquals(Long.MAX_VALUE, prefs.getLong("total_xp", 0L))
         assertProgressCard(Long.MAX_VALUE)
+    }
+
+    @Test
+    fun freshAchievementsCatalogShowsAllTwelveLockedCardsAndProgress() {
+        openAchievements(0)
+        compose.onNodeWithText("0 / 12 UNLOCKED").assertExists()
+        compose.onAllNodesWithText("LOCKED", useUnmergedTree = true).assertCountEquals(12)
+        compose.onAllNodesWithText("UNLOCKED", useUnmergedTree = true).assertCountEquals(0)
+
+        val expectedProgress = mapOf(
+            Achievement.CLEAN_SWEEP to "Progress: 0 / 5",
+            Achievement.GETTING_STARTED to "Progress: 0 / 10",
+            Achievement.DEDICATED to "Progress: 0 / 50",
+            Achievement.VETERAN to "Progress: 0 / 100",
+            Achievement.RISING_STAR to "Progress: 1 / 5",
+            Achievement.REFLEX_MASTER to "Progress: 1 / 10",
+            Achievement.LEGEND to "Progress: 1 / 25"
+        )
+        Achievement.entries.forEach { achievement ->
+            scrollToText(achievement.title)
+            scrollToText(achievement.description)
+            val card = compose.onNode(
+                hasText(achievement.title) and
+                    SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, "Locked")
+            )
+            card.assertExists()
+            val texts = card.fetchSemanticsNode().config[SemanticsProperties.Text].map { it.text }
+            assertTrue("LOCKED" in texts)
+            expectedProgress[achievement]?.let { assertTrue(it in texts) }
+            if (achievement !in expectedProgress) {
+                assertFalse(texts.any { it.startsWith("Progress:") })
+            }
+        }
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        settle()
+        compose.onNodeWithText("ACHIEVEMENTS · 0 / 12").assertExists()
+    }
+
+    @Test
+    fun earnedAchievementsShowFeedbackAndPersistWithoutRepeatingSessionCounts() {
+        var totalXp = 0L
+        var expectedUnlocked = emptySet<Achievement>()
+        repeat(5) { index ->
+            val scores = completeSession(GameMode.QUICK_DRAW, totalXp)
+            totalXp += PlayerProgression.reward(GameMode.QUICK_DRAW, scores).totalXp
+            val reflexAchievements = when (PlayerProgression.medal(scores.single())) {
+                PerformanceMedal.ELITE -> setOf(
+                    Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX, Achievement.ELITE_REFLEX
+                )
+                PerformanceMedal.PLATINUM -> setOf(Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX)
+                PerformanceMedal.GOLD -> setOf(Achievement.GOLD_REFLEX)
+                else -> emptySet()
+            }
+            val updatedUnlocked = expectedUnlocked + reflexAchievements +
+                if (index == 4) setOf(Achievement.CLEAN_SWEEP) else emptySet()
+            val newlyUnlocked = updatedUnlocked - expectedUnlocked
+            expectedUnlocked = updatedUnlocked
+            assertEquals(expectedUnlocked.map { it.name }.toSet(), savedAchievementIds())
+            assertEquals(index + 1L, prefs.getLong("completed_sessions", 0L))
+            assertEquals(index + 1, prefs.getInt("clean_session_streak", 0))
+            if (newlyUnlocked.isNotEmpty()) {
+                scrollToText(unlockBannerText(newlyUnlocked.size))
+            }
+
+            clickGameText("Round complete. Tap for results.")
+            if (newlyUnlocked.isNotEmpty()) {
+                scrollToText(unlockBannerText(newlyUnlocked.size))
+                scrollToText("UNLOCKED THIS SESSION")
+                newlyUnlocked.forEach { scrollToLastText(it.title) }
+            }
+            assertEquals(index + 1L, prefs.getLong("completed_sessions", 0L))
+            assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+            clickGameText("Tap to play this mode again.")
+            compose.onNodeWithText("ACHIEVEMENT UNLOCKED!").assertDoesNotExist()
+            compose.onNodeWithText("ACHIEVEMENTS UNLOCKED!", substring = true).assertDoesNotExist()
+            goHome()
+        }
+
+        assertTrue(Achievement.CLEAN_SWEEP in expectedUnlocked)
+        openAchievements(expectedUnlocked.size)
+        assertAchievementCards(expectedUnlocked)
+        compose.onNodeWithText("COMPLETED SESSIONS: 5\nCURRENT CLEAN STREAK: 5").assertExists()
+        goHome()
+        compose.activityRule.scenario.recreate()
+        settle()
+        openAchievements(expectedUnlocked.size)
+        assertAchievementCards(expectedUnlocked)
+        assertEquals(5L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(5, prefs.getInt("clean_session_streak", 0))
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+    }
+
+    @Test
+    fun abandonedFalseStartPreservesStreakAndDirtyCompletionResetsIt() {
+        var totalXp = 0L
+        repeat(2) {
+            val scores = completeSession(GameMode.QUICK_DRAW, totalXp)
+            totalXp += PlayerProgression.reward(GameMode.QUICK_DRAW, scores).totalXp
+            goHome()
+        }
+        val previouslyUnlocked = savedAchievementIds()
+        assertEquals(2L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(2, prefs.getInt("clean_session_streak", 0))
+
+        selectMode(GameMode.CLASSIC_RUSH)
+        clickGameText("Tap to begin.")
+        clickGameText("Don't tap until it turns green.")
+        assertTrue(prefs.getBoolean("active_session_had_false_start", false))
+        assertEquals(2, prefs.getInt("clean_session_streak", 0))
+        clickGameText("False start! This round doesn't count.")
+        reactWhenGreen()
+        assertTrue(prefs.getBoolean("active_session_had_false_start", false))
+        assertEquals(2, prefs.getInt("clean_session_streak", 0))
+        assertEquals(2L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        goHome()
+        assertFalse(prefs.contains("active_session_had_false_start"))
+        assertEquals(2, prefs.getInt("clean_session_streak", 0))
+
+        selectMode(GameMode.QUICK_DRAW)
+        clickGameText("Tap to begin.")
+        clickGameText("Don't tap until it turns green.")
+        assertTrue(prefs.getBoolean("active_session_had_false_start", false))
+        clickGameText("False start! This round doesn't count.")
+        reactWhenGreen()
+        totalXp += PlayerProgression.reward(GameMode.QUICK_DRAW, listOf(displayedRoundScore())).totalXp
+        assertEquals(3L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        assertTrue(savedAchievementIds().containsAll(previouslyUnlocked))
+        clickGameText("Round complete. Tap for results.")
+        clickGameText("Tap to play this mode again.")
+        goHome()
+        assertEquals(3L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+
+        completeSession(GameMode.QUICK_DRAW, totalXp)
+        assertEquals(4L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(1, prefs.getInt("clean_session_streak", 0))
+    }
+
+    @Test
+    fun legacyModeRecordsAndXpRecoverOnlyKnownAchievements() {
+        assertTrue(prefs.edit()
+            .putInt("best", 100)
+            .putInt("attempts", 1_234)
+            .putInt(GameMode.CLASSIC_RUSH.recordKey, 249)
+            .putLong("total_xp", 4_500L)
+            .commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        val expected = setOf(
+            Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX,
+            Achievement.RISING_STAR, Achievement.REFLEX_MASTER
+        )
+        openAchievements(expected.size)
+        assertAchievementCards(expected)
+        compose.onNodeWithText("COMPLETED SESSIONS: 0\nCURRENT CLEAN STREAK: 0").assertExists()
+        assertEquals(expected.map { it.name }.toSet(), savedAchievementIds())
+        assertEquals(0L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        assertEquals(4_500L, prefs.getLong("total_xp", 0L))
+        assertEquals(1_234, prefs.getInt("attempts", 0))
+        assertEquals(100, prefs.getInt("best", 0))
+        assertEquals(249, prefs.getInt(GameMode.CLASSIC_RUSH.recordKey, 0))
+    }
+
+    private fun savedAchievementIds(): Set<String> =
+        prefs.getStringSet("unlocked_achievement_ids", emptySet())!!.toSet()
+
+    private fun unlockBannerText(count: Int): String =
+        if (count == 1) "ACHIEVEMENT UNLOCKED!" else "$count ACHIEVEMENTS UNLOCKED!"
+
+    private fun openAchievements(unlockedCount: Int) {
+        val text = "ACHIEVEMENTS · $unlockedCount / 12"
+        scrollToText(text)
+        compose.onNodeWithText(text).performClick()
+        settle()
+        compose.onNodeWithText("ACHIEVEMENTS").assertExists()
+        compose.onNodeWithText("$unlockedCount / 12 UNLOCKED").assertExists()
+    }
+
+    private fun assertAchievementCards(unlocked: Set<Achievement>) {
+        compose.onAllNodesWithText("UNLOCKED", useUnmergedTree = true)
+            .assertCountEquals(unlocked.size)
+        compose.onAllNodesWithText("LOCKED", useUnmergedTree = true)
+            .assertCountEquals(12 - unlocked.size)
+        Achievement.entries.forEach { achievement ->
+            val status = if (achievement in unlocked) "Unlocked" else "Locked"
+            compose.onNode(hasText(achievement.title) and
+                SemanticsMatcher.expectValue(SemanticsProperties.StateDescription, status)).assertExists()
+        }
+    }
+
+    private fun scrollToLastText(text: String) {
+        compose.mainClock.autoAdvance = true
+        try {
+            val nodes = compose.onAllNodesWithText(text, useUnmergedTree = true)
+            nodes[nodes.fetchSemanticsNodes().lastIndex].performScrollTo().assertIsDisplayed()
+        } finally {
+            compose.mainClock.autoAdvance = false
+        }
     }
 
     private fun completeSession(mode: GameMode, previousXp: Long): List<Int> {
