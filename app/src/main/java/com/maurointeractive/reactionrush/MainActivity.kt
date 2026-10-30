@@ -41,7 +41,8 @@ class MainActivity : ComponentActivity() {
 enum class AppScreen {
     HOME,
     GAME,
-    ACHIEVEMENTS
+    ACHIEVEMENTS,
+    STATISTICS
 }
 
 enum class GameState {
@@ -69,6 +70,7 @@ fun ReactionRushApp() {
             HomeScreen(
                 records = records,
                 onAchievementsSelected = { screen = AppScreen.ACHIEVEMENTS },
+                onStatisticsSelected = { screen = AppScreen.STATISTICS },
                 onModeSelected = { mode ->
                     selectedMode = mode
                     screen = AppScreen.GAME
@@ -100,6 +102,10 @@ fun ReactionRushApp() {
                 onBackHome = { screen = AppScreen.HOME }
             )
         }
+
+        AppScreen.STATISTICS -> {
+            StatisticsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+        }
     }
 }
 
@@ -107,6 +113,7 @@ fun ReactionRushApp() {
 private fun HomeScreen(
     records: PersonalRecords,
     onAchievementsSelected: () -> Unit,
+    onStatisticsSelected: () -> Unit,
     onModeSelected: (GameMode) -> Unit
 ) {
     Surface(
@@ -178,6 +185,16 @@ private fun HomeScreen(
                     "ACHIEVEMENTS · ${records.achievements.unlocked.size} / ${Achievement.entries.size}",
                     fontWeight = FontWeight.Bold
                 )
+            }
+
+            Spacer(Modifier.height(8.dp))
+
+            OutlinedButton(
+                onClick = onStatisticsSelected,
+                modifier = Modifier.fillMaxWidth(),
+                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF62E6B5))
+            ) {
+                Text("STATISTICS", fontWeight = FontWeight.Bold)
             }
 
             Spacer(Modifier.height(24.dp))

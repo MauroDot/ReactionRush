@@ -14,6 +14,7 @@ import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
+import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.test.core.app.ApplicationProvider
@@ -26,6 +27,12 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.json.JSONObject
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import java.time.format.FormatStyle
+import java.util.Locale
 import kotlin.math.roundToInt
 
 @RunWith(AndroidJUnit4::class)
@@ -472,6 +479,270 @@ class PersonalRecordsGameplayTest {
         assertEquals(1_234, prefs.getInt("attempts", 0))
         assertEquals(100, prefs.getInt("best", 0))
         assertEquals(249, prefs.getInt(GameMode.CLASSIC_RUSH.recordKey, 0))
+    }
+
+    @Test
+    fun emptyStatisticsExplainsScopesAndSupportsHomeAndSystemBack() {
+        openStatistics()
+        scrollToText("Total completed sessions: 0")
+        scrollToText("Lifetime successful reactions: 0")
+        GameMode.entries.forEach { scrollToText("${it.title} completed: 0") }
+        listOf(
+            "SAVED PLAYER TOTALS", "MODE COMPLETIONS", "RETAINED HISTORY METRICS",
+            "RECENT PERFORMANCE BY MODE", "SESSION HISTORY (NEWEST FIRST)"
+        ).forEach(::scrollToText)
+        scrollToText("No completed sessions in history yet.")
+        scrollToText("Average of retained reactions: —")
+        scrollToText("Only the most recent 100 completed sessions are retained.")
+        scrollToText(
+            "Mode totals include sessions completed since Statistics was added, " +
+                "including sessions no longer in history. Earlier mode totals are unavailable."
+        )
+        compose.onAllNodesWithText(
+            "Complete 10 retained sessions in this mode to compare performance (0 / 10).",
+            useUnmergedTree = true
+        ).assertCountEquals(3)
+        compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+        settle()
+        compose.onNodeWithText("REACTION RUSH").assertExists()
+        openStatistics()
+        goHome()
+        compose.onNodeWithText("REACTION RUSH").assertExists()
+        assertTrue(savedSessions().isEmpty())
+    }
+
+    @Test
+    fun completedModesCreateOrderedDetailedHistoryOnlyOnceAndSurviveRecreation() {
+        val startedAt = System.currentTimeMillis()
+        val expected = mutableListOf<SessionHistoryEntry>()
+        var totalXp = 0L
+        for (mode in GameMode.entries) {
+            val scores = completeSession(mode, totalXp)
+            val rewardXp = PlayerProgression.reward(mode, scores).totalXp
+            totalXp += rewardXp
+            val entry = savedSessions().first()
+            assertEquals(mode, entry.mode)
+            assertEquals(scores, entry.roundScoresMs)
+            assertEquals(scores.minOrNull()!!, entry.bestTimeMs)
+            assertEquals(scores.average().roundToInt(), entry.averageTimeMs)
+            assertEquals(scores.maxOrNull()!! - scores.minOrNull()!!, entry.spreadMs)
+            assertEquals(0, entry.falseStartCount)
+            assertEquals(rewardXp, entry.xpEarned)
+            assertEquals(PlayerProgression.medal(entry.averageTimeMs), entry.medal)
+            assertTrue(entry.completedAtMillis in startedAt..System.currentTimeMillis())
+            assertTrue(entry.sessionId.isNotBlank())
+            expected += entry
+            assertEquals(expected.reversed(), savedSessions())
+            assertEquals(1L, savedModeCompletions(mode))
+            clickGameText("Round complete. Tap for results.")
+            clickGameText("Tap to play this mode again.")
+            goHome()
+            assertEquals(expected.reversed(), savedSessions())
+        }
+
+        openStatistics()
+        val expectedAverage = expected.flatMap { it.roundScoresMs }.average().roundToInt()
+        scrollToText("Total completed sessions: 3")
+        scrollToText("Lifetime successful reactions: 16")
+        scrollToText("Lifetime XP: $totalXp")
+        GameMode.entries.forEach { scrollToText("${it.title} completed: 1") }
+        scrollToText("Retained sessions: 3")
+        scrollToText("Retained reactions: 16")
+        scrollToText("Average of retained reactions: $expectedAverage ms")
+        compose.onAllNodesWithText(
+            "Complete 10 retained sessions in this mode to compare performance (1 / 10).",
+            useUnmergedTree = true
+        ).assertCountEquals(3)
+        assertHistoryRowOrder(expected.reversed())
+        for ((index, entry) in expected.reversed().withIndex()) {
+            openSessionDetails(entry)
+            assertSessionDetails(entry)
+            if (index == 0) {
+                compose.runOnUiThread { compose.activity.onBackPressedDispatcher.onBackPressed() }
+                settle()
+            } else {
+                compose.onNodeWithText("‹ STATISTICS").performClick()
+                settle()
+            }
+            compose.onNodeWithText("STATISTICS").assertExists()
+            assertEquals(expected.reversed(), savedSessions())
+        }
+        goHome()
+        compose.activityRule.scenario.recreate()
+        settle()
+        openStatistics()
+        assertHistoryRowOrder(expected.reversed())
+        assertEquals(expected.reversed(), savedSessions())
+        assertEquals(3L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        scrollToText("SESSION HISTORY (NEWEST FIRST)")
+    }
+
+    @Test
+    fun historyCountsMultipleFalseStartsAndExcludesAbandonedRounds() {
+        selectMode(GameMode.CLASSIC_RUSH)
+        clickGameText("Tap to begin.")
+        clickGameText("Don't tap until it turns green.")
+        clickGameText("False start! This round doesn't count.")
+        reactWhenGreen()
+        goHome()
+        assertTrue(savedSessions().isEmpty())
+        assertEquals(0L, savedModeCompletions(GameMode.CLASSIC_RUSH))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
+
+        selectMode(GameMode.QUICK_DRAW)
+        clickGameText("Tap to begin.")
+        repeat(2) {
+            clickGameText("Don't tap until it turns green.")
+            clickGameText("False start! This round doesn't count.")
+        }
+        reactWhenGreen()
+        val score = displayedRoundScore()
+        val entry = savedSessions().single()
+        assertEquals(2, entry.falseStartCount)
+        assertEquals(listOf(score), entry.roundScoresMs)
+        assertEquals(1L, savedModeCompletions(GameMode.QUICK_DRAW))
+        assertEquals(0L, savedModeCompletions(GameMode.CLASSIC_RUSH))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        assertEquals(2, prefs.getInt("attempts", 0))
+        goHome()
+        openStatistics()
+        scrollToText("Lifetime successful reactions: 2")
+        scrollToText("Retained sessions: 1")
+        scrollToText("Retained reactions: 1")
+        scrollToText("Average of retained reactions: $score ms")
+        openSessionDetails(entry)
+        assertSessionDetails(entry)
+        assertEquals(listOf(entry), savedSessions())
+    }
+
+    @Test
+    fun unreadableHistoryShowsRecoveryAndKeepsValidEntriesAndSavedTotals() {
+        assertTrue(prefs.edit().putString("session_history", "{invalid history").commit())
+        compose.activityRule.scenario.recreate()
+        settle()
+        openStatistics()
+        assertHistoryRecoveryNotice()
+        scrollToText("No completed sessions in history yet.")
+        goHome()
+
+        completeSession(GameMode.QUICK_DRAW, 0L)
+        val original = savedSessions().single()
+        assertFalse(SessionHistoryCodec.decode(prefs.getString("session_history", null)).hadUnreadableEntries)
+        val totalXp = prefs.getLong("total_xp", 0L)
+        val raw = JSONObject(prefs.getString("session_history", null)!!)
+        raw.getJSONArray("sessions").put(JSONObject().put("mode", "unknown"))
+        assertTrue(prefs.edit().putString("session_history", raw.toString()).commit())
+        goHome()
+        compose.activityRule.scenario.recreate()
+        settle()
+        openStatistics()
+        assertHistoryRecoveryNotice()
+        assertEquals(listOf(original), savedSessions())
+        openSessionDetails(original)
+        assertSessionDetails(original)
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        assertEquals(1L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(1L, savedModeCompletions(GameMode.QUICK_DRAW))
+        assertEquals(1, prefs.getInt("attempts", 0))
+    }
+
+    @Test
+    fun statisticsTrendsCompareOnlyTheSameModeAndShowEachDirection() {
+        fun showTrend(recentScore: Int, previousScore: Int) {
+            val entries = (0 until 10).map { index ->
+                val score = if (index < 5) recentScore else previousScore
+                SessionHistoryEntry(
+                    sessionId = "trend-$index",
+                    mode = GameMode.QUICK_DRAW,
+                    completedAtMillis = 1_700_000_000_000L - index,
+                    roundScoresMs = listOf(score),
+                    bestTimeMs = score,
+                    averageTimeMs = score,
+                    spreadMs = 0,
+                    falseStartCount = 0,
+                    xpEarned = 10,
+                    medal = PlayerProgression.medal(score)
+                )
+            }
+            assertTrue(prefs.edit()
+                .putString("session_history", SessionHistoryCodec.encode(entries))
+                .putLong("completed_sessions", 10L)
+                .putLong("completed_sessions_quick_draw", 10L)
+                .putInt("attempts", 10)
+                .putLong("total_xp", 100L)
+                .commit())
+            compose.activityRule.scenario.recreate()
+            settle()
+            openStatistics()
+            scrollToText("Average of retained reactions: ${(recentScore + previousScore) / 2} ms")
+            scrollToText("Recent 5 average: $recentScore ms")
+            scrollToText("Previous 5 average: $previousScore ms")
+            compose.onAllNodesWithText(
+                "Complete 10 retained sessions in this mode to compare performance (0 / 10).",
+                useUnmergedTree = true
+            ).assertCountEquals(2)
+        }
+
+        showTrend(recentScore = 200, previousScore = 400)
+        scrollToText("200 ms faster")
+        showTrend(recentScore = 400, previousScore = 200)
+        scrollToText("200 ms slower")
+        showTrend(recentScore = 300, previousScore = 300)
+        scrollToText("Unchanged average")
+    }
+
+    private fun savedSessions(): List<SessionHistoryEntry> =
+        SessionHistoryCodec.decode(prefs.getString("session_history", null)).sessions
+
+    private fun savedModeCompletions(mode: GameMode): Long =
+        prefs.getLong("completed_sessions_${mode.name.lowercase()}", 0L)
+
+    private fun openStatistics() {
+        scrollToText("STATISTICS")
+        compose.onNodeWithText("STATISTICS").performClick()
+        settle()
+        compose.onNodeWithText("STATISTICS").assertExists()
+    }
+
+    private fun assertHistoryRowOrder(entries: List<SessionHistoryEntry>) {
+        val tags = compose.onAllNodes(SemanticsMatcher("session row") { node ->
+            node.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("session-") == true
+        }).fetchSemanticsNodes().map { it.config[SemanticsProperties.TestTag] }
+        assertEquals(entries.map { "session-${it.sessionId}" }, tags)
+    }
+
+    private fun openSessionDetails(entry: SessionHistoryEntry) {
+        compose.mainClock.autoAdvance = true
+        try {
+            compose.onNodeWithTag("session-${entry.sessionId}")
+                .performScrollTo().assertIsDisplayed().performClick()
+        } finally {
+            compose.mainClock.autoAdvance = false
+        }
+        settle()
+        compose.onNodeWithText("SESSION DETAILS").assertExists()
+    }
+
+    private fun assertSessionDetails(entry: SessionHistoryEntry) {
+        scrollToText("Mode: ${entry.mode.title}")
+        val completedAt = DateTimeFormatter.ofLocalizedDateTime(FormatStyle.MEDIUM, FormatStyle.MEDIUM)
+            .withLocale(Locale.getDefault())
+            .format(Instant.ofEpochMilli(entry.completedAtMillis).atZone(ZoneId.systemDefault()))
+        scrollToText("Completed: $completedAt")
+        scrollToText("Best: ${entry.bestTimeMs} ms")
+        scrollToText("Average: ${entry.averageTimeMs} ms")
+        scrollToText("Spread: ${entry.spreadMs} ms")
+        scrollToText("False starts: ${entry.falseStartCount}")
+        scrollToText("XP earned: ${entry.xpEarned}")
+        scrollToText("Medal: ${entry.medal.title}")
+        entry.roundScoresMs.forEachIndexed { index, score ->
+            scrollToText("Round ${index + 1}: $score ms")
+        }
+    }
+
+    private fun assertHistoryRecoveryNotice() {
+        scrollToText("Some saved history needed recovery. Showing the sessions we could recover.")
     }
 
     private fun savedAchievementIds(): Set<String> =
