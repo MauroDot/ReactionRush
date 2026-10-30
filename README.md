@@ -38,7 +38,7 @@ session XP        = B + speed bonus + consistency bonus
 
 Quick Draw's consistency bonus is always zero because one reaction cannot measure consistency. Speed bonuses cap at half the base reward and consistency bonuses at one quarter. False starts do not enter `A` or `R`; retrying and completing a session earns its normal reward. Incomplete or abandoned sessions earn zero XP.
 
-Each new session receives a locally generated token. `RecordsRepository` accepts only the next successful round for that active token and mode. On the final round, a single preference edit saves the personal record and XP and consumes the token. Duplicate callbacks, results taps, navigation, stale tokens, and restarting the app cannot reward the completed session again. Leaving the game invalidates an unfinished token; starting another session also replaces any token left by process death. No reward history grows over time.
+Each new session receives a locally generated token. `RecordsRepository` accepts only the next successful round for that active token and mode. On the final round, a single preference edit saves the personal record and XP and consumes the token. Duplicate callbacks, results taps, navigation, stale tokens, and restarting the app cannot reward the completed session again. Leaving the game invalidates an unfinished token; starting another session also replaces any token left by process death. No unbounded completed-token ledger is retained.
 
 ### Levels and medals
 
@@ -59,7 +59,7 @@ Medals use the same completed-session score as personal records and never alter 
 
 ### Persistence and lifecycle limits
 
-XP, session-token metadata, and personal records share the existing `reaction_rush` preferences. Normal app restarts retain completed rewards. Preference writes use Android's asynchronous `apply()`: sudden process failure before a write reaches disk can lose the latest update, and disk errors are not reported to the UI. In-progress sessions and result announcements are not restored after activity recreation or process death. Background timing behavior is unchanged from RR-004A; a round can continue while the app is hidden.
+XP, session-token metadata, and personal records share the existing `reaction_rush` preferences. Normal app restarts retain completed rewards. RR-004E adds explicit interruption behavior, off-thread save confirmation, and retry feedback; its remaining crash-consistency limits are described below. Active timing measurements and session-result announcements are not restored after activity recreation or process death.
 
 ### Manual acceptance checklist
 
@@ -115,7 +115,7 @@ On load, valid existing per-mode records can prove reflex-medal achievements, an
 
 Unknown or malformed saved IDs are ignored safely. Negative or wrongly typed counters load as zero, streaks cannot exceed completed sessions, and counters saturate instead of overflowing. Unlocks are never revoked when a current streak resets or numeric history needs recovery. For unlocked measurable achievements, the UI shows their target as completed; the screen separately shows the current clean streak.
 
-The RR-004B asynchronous-write and lifecycle limits still apply: abrupt failure before disk persistence can lose the latest update, and active games are not resumed after activity recreation or process death. All achievement evaluation and storage work offline; no permissions, network services, or dependencies were added.
+RR-004E governs interruption and save-confirmation behavior. Abrupt failure before disk persistence can still lose the latest update, and active games are never resumed after activity recreation or process death. All achievement evaluation and storage work offline; no permissions, network services, or dependencies were added.
 
 ### Manual achievement acceptance checklist
 
@@ -155,7 +155,7 @@ The decoder accepts at most 200,000 serialized characters and limits nesting and
 
 Core mode, ID, timestamp, scores, false-start count, and XP fields must be valid. Best time, rounded average, spread, and medal are recomputed from valid scores, repairing inconsistent derived fields. The UI marks history that needed recovery. The next valid completion writes canonical bounded history and clears that payload warning; discarded entries cannot be reconstructed. XP and achievements are never re-awarded from decoded history.
 
-History is encoded only for completed sessions, and decoded data is cached while its stored value is unchanged. Load, partial reactions, false starts, and rejected callbacks do not serialize history. Existing per-reaction preference updates still rewrite Android's containing XML file, including the bounded history string; this tradeoff preserves the single-edit completion architecture without adding a database or dependency. The earlier asynchronous-write and active-game lifecycle limitations still apply.
+History is encoded only for completed sessions, and decoded data is cached while its stored value is unchanged. Load, partial reactions, false starts, and rejected callbacks do not serialize history. Existing per-reaction preference updates still rewrite Android's containing XML file, including the bounded history string; this tradeoff preserves the single-edit completion architecture without adding a database or dependency. Completion durability and interruption behavior follow RR-004E below.
 
 ### Manual statistics acceptance checklist
 
@@ -168,6 +168,50 @@ History is encoded only for completed sessions, and decoded data is cached while
 - With a QA save containing malformed history entries, confirm valid entries remain visible, the recovery notice appears, and all existing XP, records, and achievements remain intact.
 - Check the full Statistics page and ten-round session details on a small physical device, including large font settings and accessibility reading order.
 
+## RR-004E: Lifecycle reliability and persistence hardening
+
+### Foreground timing and interruption policy
+
+A round is playable only while the Activity is both resumed and window-focused. `MainActivity` forwards resume, pause, stop, destroy, and window-focus changes to a small synchronous `ForegroundMonitor`. Resume also samples the window's current focus because recreation can preserve a focused window without another focus-change callback. The game component owns the dependent behavior: on loss of foreground it immediately cancels the waiting coroutine, invalidates its timing ticket, cancels haptics, and abandons any unfinished repository session.
+
+The policy is deliberately conservative: WAITING, GO, false-start retry, and between-round unfinished sessions end on interruption. Returning does not restart a timer automatically. `SESSION INTERRUPTED` explains what happened, and a deliberate tap starts the selected mode again from round one with a new token. Home remains available. Valid reactions recorded before interruption remain in lifetime statistics; interruption itself adds no reaction, false start, completed session, XP, achievement, history entry, or clean-streak reset.
+
+`RoundTimingGuard` uses opaque object-identity tickets. A pending callback can signal GO once only for the current ticket, and a reaction can consume it once only while foregrounded. Backgrounding, cancellation, and clock anomalies invalidate the measurement. Rendered touch and accessibility actions capture their phase, session ID, ticket, and interaction identity, so an old action cannot act on another round, a replay, or a new session. Disposing the game disables its old handlers. Time outside the foreground cannot become a valid reaction score.
+
+Already completed final-round and session-result screens can remain visible through an ordinary pause/resume because their timing tickets and repository tokens have already been consumed. Their rewards are not repeated.
+
+### Recreation and startup
+
+Every Activity recreation returns to Home. No active round, coroutine, timing ticket, or elapsed-time measurement is restored. A saved unfinished-session marker produces an explicit interruption notice; earned records, XP, achievements, and history remain available. At process startup, any orphan active-session metadata is invalidated without awarding progress, and the same notice is shown.
+
+Preferences and player data are hydrated on `Dispatchers.IO`, with a loading state and retry action if initialization throws. Orphan invalidation occurs only after that load returns to the still-active UI coroutine, against already hydrated memory. A canceled old startup therefore cannot later invalidate a newer game. A completed save worker is process-scoped rather than Activity-scoped, so recreation does not cancel it.
+
+### Completed-session save confirmation
+
+The existing completion edit still applies history, counters, records, XP, achievements, and session-token consumption together in memory. It then requests a background durability checkpoint from `CompletionPersistence`, shared by repository instances for that preference file.
+
+A single daemon executor performs an empty-editor `commit()` barrier off the UI thread. Android snapshots the current preference generation, waits for queued writes, and reports whether that generation was written successfully. Multiple pending requests coalesce by generation; an older outcome cannot replace a newer pending result. Disk commits never run while holding the repository's external preference lock, so gameplay does not wait for the application's save worker.
+
+Home and safe result screens show saving/saved status. A failed write or worker submission shows a retry action. Retry flushes the latest accepted in-memory state; it never replays reaction, XP, achievement, or history logic. Failed saves do not roll back accepted in-memory progression or reactivate consumed session tokens.
+
+### Durability limits and migration
+
+All existing preference keys and history schema remain compatible; no toolchain, production dependencies, permissions, or network services change. Startup removes only transient active-session metadata. Save status is a process-local acknowledgment, not a new permanent gameplay statistic.
+
+`SAVED` means Android's commit barrier reported success for the completed state or a newer state. This is not an application journal, a cross-file database transaction, or an absolute guarantee against power loss, filesystem failure, or corruption. If the process dies before confirmation, the latest state may or may not have reached disk. A failed commit may also report failure after some data reached storage, so retry remains conservative and idempotent. Unrecoverable preference-file corruption or cleared app data cannot be reconstructed by this mechanism.
+
+Android can itself wait for pending `apply()` writes during lifecycle transitions. Moving the application's commits and cold loads off Main reduces application-controlled blocking but does not remove that platform behavior. Existing bounded-history XML rewrite costs also remain.
+
+### Manual lifecycle and save acceptance checklist
+
+- Background each mode during WAITING and GO using Home/app switching. Return after a long delay; verify interruption, no playable old signal, and no automatic restart or new progression.
+- Open/close the notification shade, lock/unlock the screen, and receive a call or system dialog on a physical device. Verify focus-loss interruption and a deliberate fresh restart.
+- Repeat pause/resume cycles, including after a false-start retry and between Classic/Endurance rounds. Verify no extra false starts, completed sessions, XP, achievements, history, or clean-streak changes.
+- Recreate the Activity during active play. Verify Home's interruption notice and preserved successful-reaction statistics; a new game must start at round one.
+- Complete each mode, wait for the saved acknowledgment, then recreate and cold-restart. Verify records, XP, achievements, history, mode totals, and false-start counts persist once.
+- On a disposable test device or controlled test harness, fail a save. Verify visible failure feedback, responsive UI, retry, and unchanged progression after retry.
+- Check small-screen interruption/result layouts, large fonts, Back navigation, and accessibility announcements. Actual call, overlay, storage-hardware, and power-loss behavior requires physical-device acceptance.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
@@ -178,7 +222,7 @@ Open the project in Android Studio and run it on a device, or build with the Gra
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 ```
 
-The unit tests cover records, XP, levels, achievements, clean streaks, history capture/retention/recovery, weighted statistics, same-mode trends, overflow, exactly-once completion, migration, and preference-file persistence.
+The unit tests cover records, XP, levels, achievements, clean streaks, history/statistics, foreground timing, stale tickets, save-worker ordering/failures/retries, overflow, exactly-once completion, migration, orphan recovery, and preference-file persistence.
 
 With an Android emulator or device connected, run gameplay checks with:
 
@@ -186,4 +230,4 @@ With an Android emulator or device connected, run gameplay checks with:
 .\gradlew.bat :app:connectedDebugAndroidTest
 ```
 
-The gameplay tests cover all three modes, existing records/progression/achievements, Statistics and session details, trends, false starts, unfinished sessions, recovery, migration, navigation, and saved state after activity recreation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.
+The gameplay tests cover all three modes, existing records/progression/achievements/statistics, lifecycle interruptions, focus loss, stale callbacks, recreation, saved-state confirmation, false starts, recovery, migration, and navigation. Run them on a dedicated emulator: they temporarily clear the app's preferences and restore them after each test, but an interrupted test process cannot run that restoration.
