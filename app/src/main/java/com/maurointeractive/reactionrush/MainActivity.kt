@@ -11,13 +11,18 @@ import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -47,46 +52,21 @@ enum class GameState {
     SESSION_RESULT
 }
 
-enum class GameMode(
-    val title: String,
-    val rounds: Int,
-    val description: String
-) {
-    QUICK_DRAW(
-        "QUICK DRAW",
-        1,
-        "One shot. One reaction. Chase your fastest time."
-    ),
-    CLASSIC_RUSH(
-        "CLASSIC RUSH",
-        5,
-        "Five rounds. Balance raw speed with consistency."
-    ),
-    ENDURANCE_RUSH(
-        "ENDURANCE RUSH",
-        10,
-        "Ten rounds. Stay sharp and protect your average."
-    )
-}
-
 @Composable
 fun ReactionRushApp() {
     val context = LocalContext.current
-    val prefs = remember {
-        context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
+    val recordsRepository = remember(context) {
+        RecordsRepository(context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE))
     }
+    var records by remember(recordsRepository) { mutableStateOf(recordsRepository.load()) }
 
     var screen by remember { mutableStateOf(AppScreen.HOME) }
     var selectedMode by remember { mutableStateOf(GameMode.CLASSIC_RUSH) }
 
-    val best = prefs.getInt("best", 0)
-    val attempts = prefs.getInt("attempts", 0)
-
     when (screen) {
         AppScreen.HOME -> {
             HomeScreen(
-                best = best,
-                attempts = attempts,
+                records = records,
                 onModeSelected = { mode ->
                     selectedMode = mode
                     screen = AppScreen.GAME
@@ -97,6 +77,12 @@ fun ReactionRushApp() {
         AppScreen.GAME -> {
             GameScreen(
                 mode = selectedMode,
+                records = records,
+                onReaction = { mode, score, scores ->
+                    val update = recordsRepository.recordReaction(mode, score, scores)
+                    records = update.records
+                    update.isNewRecord
+                },
                 onBackHome = {
                     screen = AppScreen.HOME
                 }
@@ -107,8 +93,7 @@ fun ReactionRushApp() {
 
 @Composable
 private fun HomeScreen(
-    best: Int,
-    attempts: Int,
+    records: PersonalRecords,
     onModeSelected: (GameMode) -> Unit
 ) {
     Surface(
@@ -118,6 +103,7 @@ private fun HomeScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally
         ) {
@@ -153,13 +139,13 @@ private fun HomeScreen(
             ) {
                 StatCard(
                     "OVERALL BEST",
-                    if (best == 0) "—" else "$best ms",
+                    formatRecord(records.lifetimeBestMs),
                     Modifier.weight(1f)
                 )
 
                 StatCard(
                     "REACTIONS",
-                    attempts.toString(),
+                    records.lifetimeReactions.toString(),
                     Modifier.weight(1f)
                 )
             }
@@ -178,6 +164,7 @@ private fun HomeScreen(
 
             ModeCard(
                 mode = GameMode.QUICK_DRAW,
+                best = records.bestFor(GameMode.QUICK_DRAW),
                 accent = Color(0xFF4DA3FF),
                 onClick = { onModeSelected(GameMode.QUICK_DRAW) }
             )
@@ -186,6 +173,7 @@ private fun HomeScreen(
 
             ModeCard(
                 mode = GameMode.CLASSIC_RUSH,
+                best = records.bestFor(GameMode.CLASSIC_RUSH),
                 accent = Color(0xFF62E6B5),
                 onClick = { onModeSelected(GameMode.CLASSIC_RUSH) }
             )
@@ -194,11 +182,12 @@ private fun HomeScreen(
 
             ModeCard(
                 mode = GameMode.ENDURANCE_RUSH,
+                best = records.bestFor(GameMode.ENDURANCE_RUSH),
                 accent = Color(0xFFFFB454),
                 onClick = { onModeSelected(GameMode.ENDURANCE_RUSH) }
             )
 
-            Spacer(Modifier.weight(1f))
+            Spacer(Modifier.height(28.dp))
 
             Text(
                 "More modes and challenges coming soon.",
@@ -215,6 +204,7 @@ private fun HomeScreen(
 @Composable
 private fun ModeCard(
     mode: GameMode,
+    best: Int,
     accent: Color,
     onClick: () -> Unit
 ) {
@@ -258,6 +248,15 @@ private fun ModeCard(
                     color = Color(0xFFAAB4D0),
                     fontSize = 13.sp
                 )
+
+                Spacer(Modifier.height(8.dp))
+
+                Text(
+                    "${mode.recordLabel}: ${formatRecord(best)}",
+                    color = accent,
+                    fontSize = 12.sp,
+                    fontWeight = FontWeight.Bold
+                )
             }
 
             Spacer(Modifier.width(12.dp))
@@ -275,12 +274,11 @@ private fun ModeCard(
 @Composable
 private fun GameScreen(
     mode: GameMode,
+    records: PersonalRecords,
+    onReaction: (GameMode, Int, List<Int>) -> Boolean,
     onBackHome: () -> Unit
 ) {
     val context = LocalContext.current
-    val prefs = remember {
-        context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
-    }
 
     var state by remember(mode) { mutableStateOf(GameState.READY) }
     var roundId by remember(mode) { mutableIntStateOf(0) }
@@ -288,13 +286,7 @@ private fun GameScreen(
     var goTime by remember(mode) { mutableLongStateOf(0L) }
     var lastScore by remember(mode) { mutableIntStateOf(0) }
 
-    var best by remember(mode) {
-        mutableIntStateOf(prefs.getInt("best", 0))
-    }
-
-    var attempts by remember(mode) {
-        mutableIntStateOf(prefs.getInt("attempts", 0))
-    }
+    var isNewRecord by remember(mode) { mutableStateOf(false) }
 
     var sessionScores by remember(mode) {
         mutableStateOf(emptyList<Int>())
@@ -324,6 +316,7 @@ private fun GameScreen(
         lastScore = 0
         sessionScores = emptyList()
         falseStarts = 0
+        isNewRecord = false
         state = GameState.READY
     }
 
@@ -332,6 +325,7 @@ private fun GameScreen(
         lastScore = 0
         sessionScores = emptyList()
         falseStarts = 0
+        isNewRecord = false
         beginRound()
     }
 
@@ -417,14 +411,14 @@ private fun GameScreen(
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 StatCard(
-                    "BEST",
-                    if (best == 0) "—" else "$best ms",
+                    mode.recordLabel,
+                    formatRecord(records.bestFor(mode)),
                     Modifier.weight(1f)
                 )
 
                 StatCard(
-                    "ATTEMPTS",
-                    attempts.toString(),
+                    "REACTIONS",
+                    records.lifetimeReactions.toString(),
                     Modifier.weight(1f)
                 )
             }
@@ -454,20 +448,12 @@ private fun GameScreen(
                             GameState.GO -> {
                                 val score =
                                     (SystemClock.elapsedRealtime() - goTime)
+                                        .coerceIn(1L, Int.MAX_VALUE.toLong())
                                         .toInt()
 
                                 lastScore = score
-                                attempts++
                                 sessionScores = sessionScores + score
-
-                                if (best == 0 || score < best) {
-                                    best = score
-                                }
-
-                                prefs.edit()
-                                    .putInt("best", best)
-                                    .putInt("attempts", attempts)
-                                    .apply()
+                                isNewRecord = onReaction(mode, score, sessionScores)
 
                                 state = GameState.ROUND_RESULT
                                 buzz(45)
@@ -495,7 +481,9 @@ private fun GameScreen(
             ) {
                 Column(
                     horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier.padding(26.dp)
+                    modifier = Modifier
+                        .verticalScroll(rememberScrollState())
+                        .padding(26.dp)
                 ) {
                     val title = when (state) {
                         GameState.READY -> mode.title
@@ -553,6 +541,21 @@ private fun GameScreen(
                         fontSize = 17.sp,
                         textAlign = TextAlign.Center
                     )
+
+                    if (isNewRecord && (
+                        state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                    )) {
+                        Spacer(Modifier.height(18.dp))
+
+                        Text(
+                            "NEW PERSONAL RECORD!\n${mode.recordLabel}: ${formatRecord(records.bestFor(mode))}",
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            color = Color(0xFF62E6B5),
+                            fontSize = 17.sp,
+                            fontWeight = FontWeight.Black,
+                            textAlign = TextAlign.Center
+                        )
+                    }
 
                     if (state == GameState.SESSION_RESULT) {
                         Spacer(Modifier.height(26.dp))
@@ -622,6 +625,8 @@ private fun GameScreen(
         }
     }
 }
+
+private fun formatRecord(scoreMs: Int): String = if (scoreMs == 0) "—" else "$scoreMs ms"
 
 @Composable
 private fun StatCard(
