@@ -2,6 +2,7 @@ package com.maurointeractive.reactionrush
 
 import android.content.SharedPreferences
 import androidx.core.content.edit
+import kotlinx.coroutines.flow.StateFlow
 import java.util.UUID
 
 data class PersonalRecords(
@@ -33,8 +34,13 @@ data class SessionReward(
 
 class RecordsRepository(
     private val prefs: SharedPreferences,
+    private val completionPersistence: CompletionPersistence = CompletionPersistence.shared(prefs),
     private val clock: () -> Long = System::currentTimeMillis
 ) {
+    val saveStatus: StateFlow<SaveStatus> = completionPersistence.status
+
+    fun retrySave() = completionPersistence.retry()
+
     private var cachedHistorySource: Any? = null
     private var cachedHistoryHadKey = false
     private var cachedHistory: SessionHistory? = null
@@ -126,6 +132,18 @@ class RecordsRepository(
                 remove(ACTIVE_SESSION_FALSE_START_COUNT)
             }
         }
+    }
+
+    /** Startup cleanup invalidates orphan metadata without replaying any progression. */
+    fun recoverInterruptedSession(): Boolean = synchronized(prefs) {
+        val saved = prefs.all
+        val activeKeys = listOf(
+            ACTIVE_SESSION_ID, ACTIVE_SESSION_MODE, ACTIVE_SESSION_ROUNDS,
+            ACTIVE_SESSION_HAD_FALSE_START, ACTIVE_SESSION_FALSE_START_COUNT
+        )
+        if (activeKeys.none { saved.containsKey(it) }) return@synchronized false
+        prefs.edit { activeKeys.forEach { remove(it) } }
+        true
     }
 
     /** Marks the current session dirty; a false start itself never changes earned progress. */
@@ -270,6 +288,7 @@ class RecordsRepository(
                 cachedHistoryHadKey = true
                 cachedHistory = updated.history
             }
+            if (reward != null) completionPersistence.checkpoint()
 
             ReactionUpdate(updated, isNewRecord, reward)
         }

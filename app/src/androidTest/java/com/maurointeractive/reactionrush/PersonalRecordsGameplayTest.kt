@@ -2,9 +2,22 @@ package com.maurointeractive.reactionrush
 
 import android.content.Context
 import android.content.SharedPreferences
+import androidx.activity.compose.setContent
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.click
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasAnyAncestor
@@ -17,8 +30,10 @@ import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performTouchInput
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -33,6 +48,7 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.time.format.FormatStyle
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.roundToInt
 
 @RunWith(AndroidJUnit4::class)
@@ -45,19 +61,22 @@ class PersonalRecordsGameplayTest {
 
     @Before
     fun prepareFreshRecords() {
+        awaitHomeReady()
         val context = ApplicationProvider.getApplicationContext<Context>()
         prefs = context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
+        awaitSavesSettled()
         originalPreferences = prefs.all.toMap()
         assertTrue(prefs.edit().clear().commit())
-        compose.activityRule.scenario.recreate()
         compose.mainClock.autoAdvance = false
-        settle()
+        recreateToHome()
     }
 
     @After
     fun restoreExistingRecords() {
         // Preserve any personal records already present on the connected device.
         if (!::originalPreferences.isInitialized) return
+        compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        awaitSavesSettled()
         val editor = prefs.edit().clear()
         originalPreferences.forEach { (key, value) ->
             when (value) {
@@ -105,8 +124,7 @@ class PersonalRecordsGameplayTest {
 
         goHome()
         compose.onAllNodesWithText("BEST AVERAGE: —").assertCountEquals(2)
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertEquals(1, prefs.getInt("attempts", 0))
         assertFalse(prefs.contains(GameMode.CLASSIC_RUSH.recordKey))
         assertEquals(0L, prefs.getLong("total_xp", 0L))
@@ -130,8 +148,7 @@ class PersonalRecordsGameplayTest {
 
         goHome()
         compose.onNodeWithText("BEST TIME: $record ms").assertExists()
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         compose.onNodeWithText("BEST TIME: $record ms").assertExists()
         selectMode(GameMode.QUICK_DRAW)
         recordBanner().assertDoesNotExist()
@@ -208,8 +225,7 @@ class PersonalRecordsGameplayTest {
             clickGameText("Tap to play this mode again.")
             goHome()
             assertProgressCard(totalXp)
-            compose.activityRule.scenario.recreate()
-            settle()
+            recreateToHome()
             assertProgressCard(totalXp)
             assertEquals(totalXp, prefs.getLong("total_xp", 0L))
         }
@@ -258,8 +274,7 @@ class PersonalRecordsGameplayTest {
     @Test
     fun levelUpFeedbackClearsForReplayWhileProgressPersists() {
         assertTrue(prefs.edit().putLong("total_xp", 99L).commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertProgressCard(99L)
 
         val mode = GameMode.QUICK_DRAW
@@ -277,8 +292,7 @@ class PersonalRecordsGameplayTest {
         compose.onNodeWithText("LEVEL UP!", substring = true).assertDoesNotExist()
         goHome()
         assertProgressCard(totalXp)
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertProgressCard(totalXp)
         selectMode(mode)
         compose.onNodeWithText("LEVEL UP!", substring = true).assertDoesNotExist()
@@ -287,17 +301,14 @@ class PersonalRecordsGameplayTest {
     @Test
     fun invalidXpLoadsSafelyAndCappedRewardsShowOnlyCreditedXp() {
         assertTrue(prefs.edit().putString("total_xp", "invalid").commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertProgressCard(0L)
         assertTrue(prefs.edit().putLong("total_xp", -10L).commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertProgressCard(0L)
 
         assertTrue(prefs.edit().putLong("total_xp", Long.MAX_VALUE - 1L).commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         assertProgressCard(Long.MAX_VALUE - 1L)
         completeSession(GameMode.QUICK_DRAW, Long.MAX_VALUE - 1L)
         assertEquals(Long.MAX_VALUE, prefs.getLong("total_xp", 0L))
@@ -397,8 +408,7 @@ class PersonalRecordsGameplayTest {
         assertAchievementCards(expectedUnlocked)
         compose.onNodeWithText("COMPLETED SESSIONS: 5\nCURRENT CLEAN STREAK: 5").assertExists()
         goHome()
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         openAchievements(expectedUnlocked.size)
         assertAchievementCards(expectedUnlocked)
         assertEquals(5L, prefs.getLong("completed_sessions", 0L))
@@ -463,8 +473,7 @@ class PersonalRecordsGameplayTest {
             .putInt(GameMode.CLASSIC_RUSH.recordKey, 249)
             .putLong("total_xp", 4_500L)
             .commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         val expected = setOf(
             Achievement.GOLD_REFLEX, Achievement.PLATINUM_REFLEX,
             Achievement.RISING_STAR, Achievement.REFLEX_MASTER
@@ -568,8 +577,7 @@ class PersonalRecordsGameplayTest {
             assertEquals(expected.reversed(), savedSessions())
         }
         goHome()
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         openStatistics()
         assertHistoryRowOrder(expected.reversed())
         assertEquals(expected.reversed(), savedSessions())
@@ -619,8 +627,7 @@ class PersonalRecordsGameplayTest {
     @Test
     fun unreadableHistoryShowsRecoveryAndKeepsValidEntriesAndSavedTotals() {
         assertTrue(prefs.edit().putString("session_history", "{invalid history").commit())
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         openStatistics()
         assertHistoryRecoveryNotice()
         scrollToText("No completed sessions in history yet.")
@@ -634,8 +641,7 @@ class PersonalRecordsGameplayTest {
         raw.getJSONArray("sessions").put(JSONObject().put("mode", "unknown"))
         assertTrue(prefs.edit().putString("session_history", raw.toString()).commit())
         goHome()
-        compose.activityRule.scenario.recreate()
-        settle()
+        recreateToHome()
         openStatistics()
         assertHistoryRecoveryNotice()
         assertEquals(listOf(original), savedSessions())
@@ -672,8 +678,7 @@ class PersonalRecordsGameplayTest {
                 .putInt("attempts", 10)
                 .putLong("total_xp", 100L)
                 .commit())
-            compose.activityRule.scenario.recreate()
-            settle()
+            recreateToHome()
             openStatistics()
             scrollToText("Average of retained reactions: ${(recentScore + previousScore) / 2} ms")
             scrollToText("Recent 5 average: $recentScore ms")
@@ -690,6 +695,388 @@ class PersonalRecordsGameplayTest {
         scrollToText("200 ms slower")
         showTrend(recentScore = 300, previousScore = 300)
         scrollToText("Unchanged average")
+    }
+
+    @Test
+    fun backgroundDuringWaitingCancelsEveryModeAndRequiresExplicitFreshRestart() {
+        for (mode in GameMode.entries) {
+            val before = progressSnapshot()
+            selectMode(mode)
+            clickGameText("Tap to begin.")
+            val oldSession = prefs.getString("active_session_id", null)
+            val oldClick = capturedGameClick("Don't tap until it turns green.")
+            assertNoTimedSaveNotice()
+            assertTrue(!oldSession.isNullOrBlank())
+            pauseAndResume(oldClick)
+            assertInterrupted()
+            assertEquals(before, progressSnapshot())
+            assertNoActiveSession()
+
+            clickGameText("Tap to restart this mode.")
+            val restartedSession = prefs.getString("active_session_id", null)
+            assertTrue(!restartedSession.isNullOrBlank() && restartedSession != oldSession)
+            invokeCaptured(oldClick)
+            settle()
+            compose.onNodeWithText("Don't tap until it turns green.").assertExists()
+            assertEquals(0, prefs.getInt("active_session_false_start_count", 0))
+            assertEquals(before, progressSnapshot())
+            goHome()
+            assertNoActiveSession()
+        }
+    }
+
+    @Test
+    fun backgroundDuringGoRejectsStaleCallbacksAndAwardsFreshCompletionsOnlyOnce() {
+        var totalXp = 0L
+        for (mode in GameMode.entries) {
+            val before = progressSnapshot()
+            selectMode(mode)
+            clickGameText("Tap to begin.")
+            advanceToGreen()
+            val oldSession = prefs.getString("active_session_id", null)
+            val oldClick = capturedGameClick("TAP!")
+            pauseAndResume(oldClick)
+            assertInterrupted()
+            repeat(2) {
+                pauseAndResume(oldClick)
+                assertInterrupted()
+                assertEquals(before, progressSnapshot())
+            }
+            assertNoActiveSession()
+
+            clickGameText("Tap to restart this mode.")
+            assertTrue(prefs.getString("active_session_id", null) != oldSession)
+            invokeCaptured(oldClick)
+            settle()
+            compose.onNodeWithText("Don't tap until it turns green.").assertExists()
+            assertEquals(0, prefs.getInt("active_session_false_start_count", 0))
+            assertEquals(before, progressSnapshot())
+
+            val scores = completeStartedSession(mode, totalXp)
+            totalXp += PlayerProgression.reward(mode, scores).totalXp
+            awaitCompletedProgressSaved()
+            assertEquals(mode.ordinal + 1L, prefs.getLong("completed_sessions", 0L))
+            assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+            assertEquals(mode.ordinal + 1, savedSessions().size)
+            val completed = progressSnapshot()
+            invokeCaptured(oldClick)
+            settle()
+            assertEquals(completed, progressSnapshot())
+            clickGameText("Round complete. Tap for results.")
+            invokeCaptured(oldClick)
+            settle()
+            compose.onNodeWithText(if (mode == GameMode.QUICK_DRAW) "DRAW COMPLETE" else "RUSH COMPLETE")
+                .assertExists()
+            assertEquals(completed, progressSnapshot())
+            goHome()
+        }
+        assertEquals(16, prefs.getInt("attempts", 0))
+    }
+
+    @Test
+    fun windowFocusLossInterruptsGoAndOldClicksCannotMutateTheRestart() {
+        val before = progressSnapshot()
+        selectMode(GameMode.QUICK_DRAW)
+        clickGameText("Tap to begin.")
+        advanceToGreen()
+        val oldClick = capturedGameClick("TAP!")
+        try {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                compose.activity.onWindowFocusChanged(false)
+            }
+            assertNoActiveSession()
+            compose.mainClock.advanceTimeBy(10_000)
+            invokeCaptured(oldClick)
+        } finally {
+            InstrumentationRegistry.getInstrumentation().runOnMainSync {
+                compose.activity.onWindowFocusChanged(true)
+            }
+        }
+        settle()
+        assertInterrupted()
+        assertEquals(before, progressSnapshot())
+        invokeCaptured(oldClick)
+        assertNoActiveSession()
+        clickGameText("Tap to restart this mode.")
+        invokeCaptured(oldClick)
+        settle()
+        compose.onNodeWithText("Don't tap until it turns green.").assertExists()
+        assertEquals(0, prefs.getInt("active_session_false_start_count", 0))
+        assertEquals(before, progressSnapshot())
+        clickGameText("Don't tap until it turns green.")
+        val oldRetry = capturedGameClick("False start! This round doesn't count.")
+        pauseAndResume(oldRetry)
+        assertInterrupted()
+        assertEquals(before, progressSnapshot())
+        assertNoActiveSession()
+    }
+
+    @Test
+    fun recreationOfActiveOrFalseStartRetryReturnsHomeAndKeepsOnlyEarnedReactions() {
+        val notice = "An unfinished session was interrupted. Choose a mode to start again."
+        for (showGreen in listOf(false, true)) {
+            selectMode(GameMode.QUICK_DRAW)
+            clickGameText("Tap to begin.")
+            if (showGreen) advanceToGreen()
+            recreateToHome()
+            compose.onNodeWithText(notice).assertExists()
+            if (!showGreen) {
+                scrollToText(notice)
+            }
+            assertNoActiveSession()
+            assertEquals(0, prefs.getInt("attempts", 0))
+        }
+
+        selectMode(GameMode.CLASSIC_RUSH)
+        clickGameText("Tap to begin.")
+        reactWhenGreen()
+        clickGameText("Round 1 complete. Tap for the next round.")
+        reactWhenGreen()
+        val partial = progressSnapshot()
+        val oldPartial = capturedGameClick("Round 2 complete. Tap for the next round.")
+        pauseAndResume(oldPartial)
+        assertInterrupted()
+        assertEquals(partial, progressSnapshot())
+        clickGameText("Tap to restart this mode.")
+        compose.onNodeWithText("ROUND 1 / 5").assertExists()
+        invokeCaptured(oldPartial)
+        settle()
+        compose.onNodeWithText("Don't tap until it turns green.").assertExists()
+        assertEquals(0, prefs.getInt("active_session_false_start_count", 0))
+        clickGameText("Don't tap until it turns green.")
+        recreateToHome()
+        compose.onNodeWithText(notice).assertExists()
+        assertNoActiveSession()
+        assertEquals(partial, progressSnapshot())
+
+        selectMode(GameMode.CLASSIC_RUSH)
+        clickGameText("Tap to begin.")
+        clickGameText("Don't tap until it turns green.")
+        clickGameText("False start! This round doesn't count.")
+        recreateToHome()
+        compose.onNodeWithText(notice).assertExists()
+        assertNoActiveSession()
+        assertEquals(partial, progressSnapshot())
+        assertEquals(2, prefs.getInt("attempts", 0))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
+        assertEquals(0L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        assertTrue(savedSessions().isEmpty())
+    }
+
+    @Test
+    fun completedResultsAndQueuedSavesSurvivePausesAndRecreationWithoutDuplicateProgress() {
+        var totalXp = 0L
+        for (mode in GameMode.entries) {
+            val scores = completeSession(mode, totalXp)
+            totalXp += PlayerProgression.reward(mode, scores).totalXp
+            val completed = progressSnapshot()
+            pauseAndResume()
+            compose.onNodeWithText("Round complete. Tap for results.").assertExists()
+            compose.onNodeWithText("SESSION INTERRUPTED").assertDoesNotExist()
+            assertEquals(completed, progressSnapshot())
+            awaitCompletedProgressSaved()
+            if (mode == GameMode.CLASSIC_RUSH) {
+                scrollToText("Completed progress saved")
+            }
+            clickGameText("Round complete. Tap for results.")
+            pauseAndResume()
+            compose.onNodeWithText(if (mode == GameMode.QUICK_DRAW) "DRAW COMPLETE" else "RUSH COMPLETE")
+                .assertExists()
+            awaitCompletedProgressSaved()
+            assertEquals(completed, progressSnapshot())
+            goHome()
+        }
+        val completed = progressSnapshot()
+        recreateToHome()
+        compose.onNodeWithText("An unfinished session was interrupted. Choose a mode to start again.")
+            .assertDoesNotExist()
+        assertEquals(completed, progressSnapshot())
+        assertEquals(3L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(totalXp, prefs.getLong("total_xp", 0L))
+        assertEquals(3, savedSessions().size)
+    }
+
+    @Test
+    fun startupRecoversAnOrphanTokenWithoutChangingCompletedProgress() {
+        completeSession(GameMode.QUICK_DRAW, 0L)
+        awaitCompletedProgressSaved()
+        goHome()
+        val completed = progressSnapshot()
+        val orphan = RecordsRepository(prefs).startSession(GameMode.ENDURANCE_RUSH)
+        assertEquals(orphan, prefs.getString("active_session_id", null))
+        recreateToHome()
+        compose.onNodeWithText("An unfinished session was interrupted. Choose a mode to start again.")
+            .assertExists()
+        assertNoActiveSession()
+        assertEquals(completed, progressSnapshot())
+        assertEquals(1L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(1, savedSessions().size)
+    }
+
+    @Test
+    fun saveFeedbackShowsEachStateAndRetryDoesNotClickItsParentOrChangeProgress() {
+        val before = progressSnapshot()
+        val status = mutableStateOf(SaveStatus.SAVING)
+        val retryClicks = AtomicInteger()
+        val parentClicks = AtomicInteger()
+        InstrumentationRegistry.getInstrumentation().runOnMainSync {
+            compose.activity.setContent {
+                Box(Modifier.fillMaxSize().background(Color(0xFF0B1020)).padding(24.dp)
+                    .clickable { parentClicks.incrementAndGet() }) {
+                    ProgressSaveNotice(status.value, onRetry = { retryClicks.incrementAndGet() })
+                }
+            }
+        }
+        settle()
+        compose.onNodeWithText("Saving completed progress…").assertExists()
+        compose.onNodeWithText("RETRY SAVE").assertDoesNotExist()
+
+        compose.runOnUiThread { status.value = SaveStatus.SAVED }
+        settle()
+        compose.onNodeWithText("Completed progress saved").assertExists()
+        compose.onNodeWithText("RETRY SAVE").assertDoesNotExist()
+
+        compose.runOnUiThread { status.value = SaveStatus.FAILED }
+        settle()
+        compose.onNodeWithText("Completed progress could not be saved. Keep the app open and retry.")
+            .assertExists()
+        compose.onNodeWithText("RETRY SAVE").performTouchInput { click() }
+        settle()
+        assertEquals(1, retryClicks.get())
+        assertEquals(0, parentClicks.get())
+        assertEquals(before, progressSnapshot())
+
+        compose.runOnUiThread { status.value = SaveStatus.IDLE }
+        settle()
+        compose.onNodeWithText("RETRY SAVE").assertDoesNotExist()
+        compose.onNodeWithText("Completed progress saved").assertDoesNotExist()
+        compose.onNodeWithText("Saving completed progress…").assertDoesNotExist()
+    }
+
+    @Test
+    fun disposedReadyAndHomeCallbacksCannotReplaceOrAbandonANewerSession() {
+        selectMode(GameMode.QUICK_DRAW)
+        val oldReady = capturedGameClick("Tap to begin.")
+        val oldHome = checkNotNull(compose.onNode(
+            hasClickAction() and hasText("HOME", substring = true)
+        ).fetchSemanticsNode().config[SemanticsActions.OnClick].action)
+        goHome()
+        selectMode(GameMode.CLASSIC_RUSH)
+        clickGameText("Tap to begin.")
+        val current = prefs.all.toMap()
+        invokeCaptured(oldReady)
+        invokeCaptured(oldHome)
+        settle()
+        assertEquals(current, prefs.all)
+        compose.onNodeWithText("ROUND 1 / 5").assertExists()
+        compose.onNodeWithText("Don't tap until it turns green.").assertExists()
+        val scores = completeStartedSession(GameMode.CLASSIC_RUSH, 0L)
+        awaitCompletedProgressSaved()
+        val completed = progressSnapshot()
+        invokeCaptured(oldReady)
+        invokeCaptured(oldHome)
+        settle()
+        compose.onNodeWithText("Round complete. Tap for results.").assertExists()
+        assertEquals(completed, progressSnapshot())
+        assertEquals(scores, savedSessions().single().roundScoresMs)
+        assertEquals(5, prefs.getInt("attempts", 0))
+        assertEquals(1L, prefs.getLong("completed_sessions", 0L))
+    }
+
+    @Test
+    fun roundResultAndFalseRetryCallbacksStayBoundToTheirOriginalRound() {
+        val mode = GameMode.CLASSIC_RUSH
+        val scores = mutableListOf<Int>()
+        selectMode(mode)
+        val oldReady = capturedGameClick("Tap to begin.")
+        clickGameText("Tap to begin.")
+        reactWhenGreen()
+        scores += displayedRoundScore()
+        val oldRoundOne = capturedGameClick("Round 1 complete. Tap for the next round.")
+        clickGameText("Round 1 complete. Tap for the next round.")
+        reactWhenGreen()
+        scores += displayedRoundScore()
+        val roundTwo = prefs.all.toMap()
+        invokeCaptured(oldRoundOne)
+        settle()
+        compose.onNodeWithText("Round 2 complete. Tap for the next round.").assertExists()
+        assertEquals(roundTwo, prefs.all)
+
+        clickGameText("Round 2 complete. Tap for the next round.")
+        clickGameText("Don't tap until it turns green.")
+        val oldRetry = capturedGameClick("False start! This round doesn't count.")
+        clickGameText("False start! This round doesn't count.")
+        clickGameText("Don't tap until it turns green.")
+        val secondFalseStart = prefs.all.toMap()
+        invokeCaptured(oldRetry)
+        settle()
+        compose.onNodeWithText("TOO SOON!").assertExists()
+        assertEquals(secondFalseStart, prefs.all)
+        assertEquals(2, prefs.getInt("active_session_false_start_count", 0))
+
+        clickGameText("False start! This round doesn't count.")
+        for (round in 3..5) {
+            reactWhenGreen()
+            scores += displayedRoundScore()
+            if (round < 5) clickGameText("Round $round complete. Tap for the next round.")
+        }
+        awaitCompletedProgressSaved()
+        assertEquals(scores, savedSessions().single().roundScoresMs)
+        assertEquals(2, savedSessions().single().falseStartCount)
+        assertEquals(PlayerProgression.reward(mode, scores).totalXp.toLong(), prefs.getLong("total_xp", 0L))
+        assertEquals(5, prefs.getInt("attempts", 0))
+        assertEquals(1L, prefs.getLong("completed_sessions", 0L))
+        assertEquals(0, prefs.getInt("clean_session_streak", 0))
+        val completed = progressSnapshot()
+        clickGameText("Round complete. Tap for results.")
+        clickGameText("Tap to play this mode again.")
+        invokeCaptured(oldReady)
+        settle()
+        compose.onNodeWithText("Tap to begin.", substring = true).assertExists()
+        assertNoActiveSession()
+        assertEquals(completed, progressSnapshot())
+    }
+
+    private fun progressSnapshot(): Map<String, *> =
+        prefs.all.filterKeys { !it.startsWith("active_session_") }.mapValues { (_, value) ->
+            if (value is Set<*>) value.toSet() else value
+        }
+
+    private fun assertNoActiveSession() {
+        listOf(
+            "active_session_id", "active_session_mode", "active_session_rounds",
+            "active_session_had_false_start", "active_session_false_start_count"
+        ).forEach { key -> assertFalse("Unexpected active metadata: $key", prefs.contains(key)) }
+    }
+
+    private fun capturedGameClick(text: String): () -> Boolean = checkNotNull(
+        compose.onNode(
+            hasClickAction() and hasAnyDescendant(hasText(text, substring = true)),
+            useUnmergedTree = true
+        ).fetchSemanticsNode().config[SemanticsActions.OnClick].action
+    )
+
+    private fun invokeCaptured(action: () -> Boolean) {
+        InstrumentationRegistry.getInstrumentation().runOnMainSync { action() }
+    }
+
+    private fun pauseAndResume(oldClick: (() -> Boolean)? = null) {
+        compose.activityRule.scenario.moveToState(Lifecycle.State.STARTED)
+        try {
+            assertNoActiveSession()
+            compose.mainClock.advanceTimeBy(10_000)
+            oldClick?.let { invokeCaptured(it) }
+        } finally {
+            compose.activityRule.scenario.moveToState(Lifecycle.State.RESUMED)
+        }
+        awaitForeground()
+        settle()
+    }
+
+    private fun assertInterrupted() {
+        awaitText("SESSION INTERRUPTED")
+        compose.onNodeWithText("TAP!").assertDoesNotExist()
     }
 
     private fun savedSessions(): List<SessionHistoryEntry> =
@@ -785,6 +1172,10 @@ class PersonalRecordsGameplayTest {
     private fun completeSession(mode: GameMode, previousXp: Long): List<Int> {
         selectMode(mode)
         clickGameText("Tap to begin.")
+        return completeStartedSession(mode, previousXp)
+    }
+
+    private fun completeStartedSession(mode: GameMode, previousXp: Long): List<Int> {
         val scores = mutableListOf<Int>()
         repeat(mode.rounds) { round ->
             reactWhenGreen()
@@ -829,12 +1220,23 @@ class PersonalRecordsGameplayTest {
     }
 
     private fun reactWhenGreen() {
+        advanceToGreen()
+        clickGameText("TAP!")
+    }
+
+    private fun advanceToGreen() {
         // The production wait is random in [1500, 4500] ms. Advance virtual Compose
         // time instead of introducing real multi-second waits into gameplay tests.
         compose.mainClock.advanceTimeBy(4_600)
         compose.waitForIdle()
         compose.onNodeWithText("TAP!").assertExists()
-        clickGameText("TAP!")
+        assertNoTimedSaveNotice()
+    }
+
+    private fun assertNoTimedSaveNotice() {
+        compose.onNodeWithText("Saving completed progress…").assertDoesNotExist()
+        compose.onNodeWithText("Completed progress saved").assertDoesNotExist()
+        compose.onNodeWithText("RETRY SAVE").assertDoesNotExist()
     }
 
     private fun displayedRoundScore(): Int {
@@ -858,6 +1260,52 @@ class PersonalRecordsGameplayTest {
     private fun settle() {
         compose.mainClock.advanceTimeByFrame()
         compose.waitForIdle()
+    }
+
+    private fun recreateToHome() {
+        compose.activityRule.scenario.recreate()
+        awaitHomeReady()
+    }
+
+    private fun awaitHomeReady() {
+        val originalAutoAdvance = compose.mainClock.autoAdvance
+        compose.mainClock.autoAdvance = true
+        try {
+            compose.waitUntil(10_000) {
+                compose.onAllNodesWithText("REACTION RUSH")
+                    .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+            }
+            awaitForeground()
+        } finally {
+            compose.mainClock.autoAdvance = originalAutoAdvance
+        }
+    }
+
+    private fun awaitForeground() {
+        compose.waitUntil(10_000) {
+            compose.runOnUiThread {
+                compose.activity.lifecycle.currentState == Lifecycle.State.RESUMED &&
+                    compose.activity.hasWindowFocus()
+            }
+        }
+    }
+
+    private fun awaitSavesSettled() {
+        val status = CompletionPersistence.shared(prefs).status
+        compose.waitUntil(10_000) { status.value != SaveStatus.SAVING }
+    }
+
+    private fun awaitText(text: String) {
+        compose.waitUntil(10_000) {
+            compose.mainClock.advanceTimeByFrame()
+            compose.onAllNodesWithText(text)
+                .fetchSemanticsNodes(atLeastOneRootRequired = false).isNotEmpty()
+        }
+    }
+
+    private fun awaitCompletedProgressSaved() {
+        awaitText("Completed progress saved")
+        assertEquals(SaveStatus.SAVED, CompletionPersistence.shared(prefs).status.value)
     }
 
     private fun scrollToText(text: String) {

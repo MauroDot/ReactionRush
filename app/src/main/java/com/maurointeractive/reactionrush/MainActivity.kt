@@ -16,25 +16,62 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.LiveRegionMode
 import androidx.compose.ui.semantics.liveRegion
+import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
 class MainActivity : ComponentActivity() {
+    private val foregroundMonitor = ForegroundMonitor()
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContent { ReactionRushApp() }
+        setContent { ReactionRushApp(foregroundMonitor) }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Recreation can preserve an already focused window without another focus-change
+        // callback. Refresh the new monitor instead of relying only on future changes.
+        foregroundMonitor.setWindowFocused(hasWindowFocus())
+        foregroundMonitor.setResumed(true)
+    }
+
+    override fun onPause() {
+        foregroundMonitor.setResumed(false)
+        super.onPause()
+    }
+
+    override fun onStop() {
+        foregroundMonitor.setResumed(false)
+        super.onStop()
+    }
+
+    override fun onDestroy() {
+        foregroundMonitor.setResumed(false)
+        super.onDestroy()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        foregroundMonitor.setWindowFocused(hasFocus)
+        super.onWindowFocusChanged(hasFocus)
     }
 }
 
@@ -51,60 +88,109 @@ enum class GameState {
     GO,
     ROUND_RESULT,
     FALSE_START,
+    INTERRUPTED,
     SESSION_RESULT
 }
 
 @Composable
-fun ReactionRushApp() {
-    val context = LocalContext.current
-    val recordsRepository = remember(context) {
-        RecordsRepository(context.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE))
-    }
-    var records by remember(recordsRepository) { mutableStateOf(recordsRepository.load()) }
+fun ReactionRushApp(foregroundMonitor: ForegroundMonitor) {
+    val applicationContext = LocalContext.current.applicationContext
+    var repository by remember { mutableStateOf<RecordsRepository?>(null) }
+    var playerRecords by remember { mutableStateOf<PersonalRecords?>(null) }
+    var loadAttempt by remember { mutableIntStateOf(0) }
+    var loadFailed by remember { mutableStateOf(false) }
+    var hadUnfinishedSession by rememberSaveable { mutableStateOf(false) }
+    var showInterruptedNotice by rememberSaveable { mutableStateOf(false) }
 
     var screen by remember { mutableStateOf(AppScreen.HOME) }
     var selectedMode by remember { mutableStateOf(GameMode.CLASSIC_RUSH) }
 
-    when (screen) {
-        AppScreen.HOME -> {
-            HomeScreen(
-                records = records,
-                onAchievementsSelected = { screen = AppScreen.ACHIEVEMENTS },
-                onStatisticsSelected = { screen = AppScreen.STATISTICS },
-                onModeSelected = { mode ->
-                    selectedMode = mode
-                    screen = AppScreen.GAME
+    LaunchedEffect(applicationContext, loadAttempt) {
+        loadFailed = false
+        try {
+            val loaded = withContext(Dispatchers.IO) {
+                val prefs = applicationContext.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
+                val store = RecordsRepository(prefs)
+                store to store.load()
+            }
+            // Preferences are hydrated now. This memory-only invalidation runs after
+            // cancellation checks on Main, so an obsolete startup cannot clear a newer game.
+            val orphanedSession = loaded.first.recoverInterruptedSession()
+            showInterruptedNotice = showInterruptedNotice || hadUnfinishedSession || orphanedSession
+            hadUnfinishedSession = false
+            repository = loaded.first
+            playerRecords = loaded.second
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            loadFailed = true
+        }
+    }
+
+    val recordsRepository = repository
+    val records = playerRecords
+    if (recordsRepository == null || records == null) {
+        StartupScreen(loadFailed, onRetry = { loadAttempt++ })
+        return
+    }
+    val saveStatus by recordsRepository.saveStatus.collectAsState()
+
+    Column(Modifier.fillMaxSize().background(Color(0xFF0B1020))) {
+        if (screen != AppScreen.GAME && saveStatus != SaveStatus.IDLE) {
+            ProgressSaveNotice(saveStatus, recordsRepository::retrySave, Modifier.padding(16.dp))
+        }
+        Box(Modifier.weight(1f)) {
+            when (screen) {
+                AppScreen.HOME -> {
+                    HomeScreen(
+                        records = records,
+                        interrupted = showInterruptedNotice,
+                        onDismissInterruption = { showInterruptedNotice = false },
+                        onAchievementsSelected = { screen = AppScreen.ACHIEVEMENTS },
+                        onStatisticsSelected = { screen = AppScreen.STATISTICS },
+                        onModeSelected = { mode ->
+                            selectedMode = mode
+                            screen = AppScreen.GAME
+                        }
+                    )
                 }
-            )
-        }
 
-        AppScreen.GAME -> {
-            GameScreen(
-                mode = selectedMode,
-                records = records,
-                onStartSession = recordsRepository::startSession,
-                onAbandonSession = recordsRepository::abandonSession,
-                onFalseStart = recordsRepository::recordFalseStart,
-                onReaction = { sessionId, mode, score, scores ->
-                    val update = recordsRepository.recordReaction(sessionId, mode, score, scores)
-                    records = update.records
-                    update
-                },
-                onBackHome = {
-                    screen = AppScreen.HOME
+                AppScreen.GAME -> {
+                    GameScreen(
+                        mode = selectedMode,
+                        records = records,
+                        foregroundMonitor = foregroundMonitor,
+                        saveStatus = saveStatus,
+                        onRetrySave = recordsRepository::retrySave,
+                        onStartSession = { mode ->
+                            hadUnfinishedSession = true
+                            showInterruptedNotice = false
+                            recordsRepository.startSession(mode)
+                        },
+                        onAbandonSession = recordsRepository::abandonSession,
+                        onSessionInterrupted = { showInterruptedNotice = true },
+                        onFalseStart = recordsRepository::recordFalseStart,
+                        onReaction = { sessionId, mode, score, scores ->
+                            val update = recordsRepository.recordReaction(sessionId, mode, score, scores)
+                            playerRecords = update.records
+                            if (update.reward != null) hadUnfinishedSession = false
+                            update
+                        },
+                        onBackHome = {
+                            hadUnfinishedSession = false
+                            screen = AppScreen.HOME
+                        }
+                    )
                 }
-            )
-        }
 
-        AppScreen.ACHIEVEMENTS -> {
-            AchievementsScreen(
-                records = records,
-                onBackHome = { screen = AppScreen.HOME }
-            )
-        }
+                AppScreen.ACHIEVEMENTS -> {
+                    AchievementsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+                }
 
-        AppScreen.STATISTICS -> {
-            StatisticsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+                AppScreen.STATISTICS -> {
+                    StatisticsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+                }
+            }
         }
     }
 }
@@ -112,6 +198,8 @@ fun ReactionRushApp() {
 @Composable
 private fun HomeScreen(
     records: PersonalRecords,
+    interrupted: Boolean,
+    onDismissInterruption: () -> Unit,
     onAchievementsSelected: () -> Unit,
     onStatisticsSelected: () -> Unit,
     onModeSelected: (GameMode) -> Unit
@@ -152,6 +240,23 @@ private fun HomeScreen(
             )
 
             Spacer(Modifier.height(24.dp))
+
+            if (interrupted) {
+                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35))) {
+                    Column(Modifier.padding(16.dp)) {
+                        Text(
+                            "An unfinished session was interrupted. Choose a mode to start again.",
+                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+                            color = Color(0xFFFFD166),
+                            fontSize = 14.sp
+                        )
+                        TextButton(onClick = onDismissInterruption) {
+                            Text("DISMISS", color = Color(0xFFAAB4D0))
+                        }
+                    }
+                }
+                Spacer(Modifier.height(16.dp))
+            }
 
             Row(
                 Modifier.fillMaxWidth(),
@@ -322,28 +427,32 @@ private fun ModeCard(
 private fun GameScreen(
     mode: GameMode,
     records: PersonalRecords,
+    foregroundMonitor: ForegroundMonitor,
+    saveStatus: SaveStatus,
+    onRetrySave: () -> Unit,
     onStartSession: (GameMode) -> String,
     onAbandonSession: (String) -> Unit,
+    onSessionInterrupted: () -> Unit,
     onFalseStart: (String) -> Unit,
     onReaction: (String, GameMode, Int, List<Int>) -> ReactionUpdate,
     onBackHome: () -> Unit
 ) {
     val context = LocalContext.current
+    val roundScope = rememberCoroutineScope()
+    val timing = remember(mode) { RoundTimingGuard() }
 
     var state by remember(mode) { mutableStateOf(GameState.READY) }
-    var roundId by remember(mode) { mutableIntStateOf(0) }
     var currentRound by remember(mode) { mutableIntStateOf(1) }
-    var goTime by remember(mode) { mutableLongStateOf(0L) }
     var lastScore by remember(mode) { mutableIntStateOf(0) }
+    var roundTicket by remember(mode) { mutableStateOf<RoundTicket?>(null) }
+    var waitJob by remember(mode) { mutableStateOf<Job?>(null) }
+    var interactionEpoch by remember(mode) { mutableStateOf(Any()) }
 
     var isNewRecord by remember(mode) { mutableStateOf(false) }
     var sessionId by remember(mode) { mutableStateOf("") }
     var sessionReward by remember(mode) { mutableStateOf<SessionReward?>(null) }
     val abandonSession by rememberUpdatedState(onAbandonSession)
-
-    DisposableEffect(mode) {
-        onDispose { abandonSession(sessionId) }
-    }
+    val notifyInterruption by rememberUpdatedState(onSessionInterrupted)
 
     var sessionScores by remember(mode) {
         mutableStateOf(emptyList<Int>())
@@ -363,12 +472,53 @@ private fun GameScreen(
         )
     }
 
+    fun interruptSession() {
+        interactionEpoch = Any()
+        waitJob?.cancel()
+        waitJob = null
+        timing.cancel()
+        roundTicket = null
+        context.getSystemService(Vibrator::class.java)?.cancel()
+        if (sessionId.isNotBlank() && sessionReward == null) {
+            abandonSession(sessionId)
+            sessionId = ""
+            sessionScores = emptyList()
+            falseStarts = 0
+            lastScore = 0
+            currentRound = 1
+            isNewRecord = false
+            state = GameState.INTERRUPTED
+            notifyInterruption()
+        }
+    }
+
     fun beginRound() {
+        interactionEpoch = Any()
+        waitJob?.cancel()
+        val ticket = timing.beginWaiting()
+        if (ticket == null) {
+            interruptSession()
+            return
+        }
+        roundTicket = ticket
         state = GameState.WAITING
-        roundId++
+        waitJob = roundScope.launch {
+            delay(Random.nextLong(1500, 4501))
+            if (state == GameState.WAITING && roundTicket === ticket &&
+                timing.signalGo(ticket, SystemClock.elapsedRealtime())
+            ) {
+                state = GameState.GO
+                buzz(35)
+            }
+        }
     }
 
     fun resetSession() {
+        interactionEpoch = Any()
+        waitJob?.cancel()
+        waitJob = null
+        timing.cancel()
+        roundTicket = null
         currentRound = 1
         lastScore = 0
         sessionScores = emptyList()
@@ -390,15 +540,20 @@ private fun GameScreen(
         beginRound()
     }
 
-    LaunchedEffect(roundId) {
-        if (state == GameState.WAITING) {
-            delay(Random.nextLong(1500, 4501))
-
-            if (state == GameState.WAITING) {
-                goTime = SystemClock.elapsedRealtime()
-                state = GameState.GO
-                buzz(35)
-            }
+    DisposableEffect(mode, foregroundMonitor) {
+        val unregister = foregroundMonitor.observe { foreground ->
+            val wasForeground = timing.isForeground
+            timing.setForeground(foreground)
+            // The initial subscription may precede the first window-focus callback.
+            // With no live session, that is not an interruption of the rendered READY action.
+            if (!foreground && (wasForeground || sessionId.isNotBlank())) interruptSession()
+        }
+        onDispose {
+            unregister()
+            waitJob?.cancel()
+            timing.setForeground(false)
+            context.getSystemService(Vibrator::class.java)?.cancel()
+            abandonSession(sessionId)
         }
     }
 
@@ -407,6 +562,61 @@ private fun GameScreen(
         else sessionScores.average().roundToInt()
 
     val sessionBest = sessionScores.minOrNull() ?: 0
+    // Bind each rendered handler to its phase/session/timing ticket. A captured old
+    // callback cannot act on a newer session or on a signal not yet drawn on screen.
+    val renderedState = state
+    val renderedSessionId = sessionId
+    val renderedTicket = roundTicket
+    val renderedEpoch = interactionEpoch
+    val onHomeTap: () -> Boolean = homeTap@{
+        if (!timing.isForeground || interactionEpoch !== renderedEpoch ||
+            sessionId != renderedSessionId
+        ) return@homeTap false
+        onAbandonSession(sessionId)
+        onBackHome()
+        true
+    }
+    val onGameTap: () -> Boolean = gameTap@{
+        if (!timing.isForeground || interactionEpoch !== renderedEpoch || state != renderedState ||
+            sessionId != renderedSessionId || roundTicket !== renderedTicket
+        ) return@gameTap false
+        when (renderedState) {
+            GameState.READY, GameState.INTERRUPTED -> startSession()
+            GameState.WAITING -> {
+                waitJob?.cancel()
+                timing.cancel()
+                onFalseStart(renderedSessionId)
+                if (falseStarts < Int.MAX_VALUE) falseStarts++
+                state = GameState.FALSE_START
+                buzz(90)
+            }
+            GameState.GO -> {
+                val ticket = renderedTicket ?: return@gameTap false
+                val score = timing.react(ticket, SystemClock.elapsedRealtime())
+                if (score == null) {
+                    interruptSession()
+                    return@gameTap false
+                }
+                lastScore = score
+                sessionScores = sessionScores + score
+                val update = onReaction(sessionId, mode, score, sessionScores)
+                isNewRecord = update.isNewRecord
+                sessionReward = update.reward
+                state = GameState.ROUND_RESULT
+                buzz(45)
+            }
+            GameState.ROUND_RESULT -> {
+                if (currentRound >= mode.rounds) state = GameState.SESSION_RESULT
+                else {
+                    currentRound++
+                    beginRound()
+                }
+            }
+            GameState.FALSE_START -> beginRound()
+            GameState.SESSION_RESULT -> resetSession()
+        }
+        true
+    }
 
     val bg = when (state) {
         GameState.GO -> Color(0xFF0D7A55)
@@ -433,10 +643,9 @@ private fun GameScreen(
             ) {
                 Text(
                     "‹ HOME",
-                    modifier = Modifier.clickable {
-                        onAbandonSession(sessionId)
-                        onBackHome()
-                    },
+                    modifier = Modifier
+                        .semantics(mergeDescendants = true) { onClick(action = onHomeTap) }
+                        .clickable { onHomeTap() },
                     color = Color(0xFFAAB4D0),
                     fontSize = 13.sp,
                     fontWeight = FontWeight.Bold
@@ -456,6 +665,7 @@ private fun GameScreen(
 
             if (
                 state != GameState.READY &&
+                state != GameState.INTERRUPTED &&
                 state != GameState.SESSION_RESULT
             ) {
                 Text(
@@ -495,53 +705,9 @@ private fun GameScreen(
                         Color.White.copy(alpha = 0.07f),
                         RoundedCornerShape(28.dp)
                     )
-                    .clickable {
-                        when (state) {
-                            GameState.READY -> {
-                                startSession()
-                            }
-
-                            GameState.WAITING -> {
-                                onFalseStart(sessionId)
-                                falseStarts++
-                                state = GameState.FALSE_START
-                                buzz(90)
-                            }
-
-                            GameState.GO -> {
-                                val score =
-                                    (SystemClock.elapsedRealtime() - goTime)
-                                        .coerceIn(1L, Int.MAX_VALUE.toLong())
-                                        .toInt()
-
-                                lastScore = score
-                                sessionScores = sessionScores + score
-                                val update = onReaction(sessionId, mode, score, sessionScores)
-                                isNewRecord = update.isNewRecord
-                                sessionReward = update.reward
-
-                                state = GameState.ROUND_RESULT
-                                buzz(45)
-                            }
-
-                            GameState.ROUND_RESULT -> {
-                                if (currentRound >= mode.rounds) {
-                                    state = GameState.SESSION_RESULT
-                                } else {
-                                    currentRound++
-                                    beginRound()
-                                }
-                            }
-
-                            GameState.FALSE_START -> {
-                                beginRound()
-                            }
-
-                            GameState.SESSION_RESULT -> {
-                                resetSession()
-                            }
-                        }
-                    },
+                    // Bind accessibility actions to the same immutable render snapshot.
+                    .semantics(mergeDescendants = true) { onClick(action = onGameTap) }
+                    .clickable { onGameTap() },
                 contentAlignment = Alignment.Center
             ) {
                 Column(
@@ -556,6 +722,7 @@ private fun GameScreen(
                         GameState.GO -> "TAP!"
                         GameState.ROUND_RESULT -> "$lastScore ms"
                         GameState.FALSE_START -> "TOO SOON!"
+                        GameState.INTERRUPTED -> "SESSION INTERRUPTED"
                         GameState.SESSION_RESULT ->
                             if (mode == GameMode.QUICK_DRAW)
                                 "DRAW COMPLETE"
@@ -582,6 +749,9 @@ private fun GameScreen(
                         GameState.FALSE_START ->
                             "False start! This round doesn't count.\nTap to retry."
 
+                        GameState.INTERRUPTED ->
+                            "This unfinished session has ended. Saved reactions are kept.\nTap to restart this mode."
+
                         GameState.SESSION_RESULT ->
                             "Tap to play this mode again."
                     }
@@ -591,7 +761,7 @@ private fun GameScreen(
                         color = Color.White,
                         fontSize = when (state) {
                             GameState.ROUND_RESULT -> 40.sp
-                            GameState.SESSION_RESULT -> 28.sp
+                            GameState.SESSION_RESULT, GameState.INTERRUPTED -> 28.sp
                             else -> 34.sp
                         },
                         fontWeight = FontWeight.Black,
@@ -606,6 +776,13 @@ private fun GameScreen(
                         fontSize = 17.sp,
                         textAlign = TextAlign.Center
                     )
+
+                    if ((state == GameState.ROUND_RESULT && sessionReward != null) ||
+                        state == GameState.SESSION_RESULT
+                    ) {
+                        Spacer(Modifier.height(12.dp))
+                        ProgressSaveNotice(saveStatus, onRetrySave)
+                    }
 
                     sessionReward?.let { reward ->
                         if (reward.newLevel > reward.previousLevel && (
@@ -749,6 +926,9 @@ private fun GameScreen(
                     GameState.SESSION_RESULT ->
                         "Tap HOME to choose another challenge."
 
+                    GameState.INTERRUPTED ->
+                        "Tap to restart, or choose HOME for another mode."
+
                     else ->
                         "Stay ready. Don't anticipate the signal."
                 },
@@ -758,6 +938,58 @@ private fun GameScreen(
             )
 
             Spacer(Modifier.height(8.dp))
+        }
+    }
+}
+
+@Composable
+private fun StartupScreen(failed: Boolean, onRetry: () -> Unit) {
+    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B1020)) {
+        Column(
+            modifier = Modifier.fillMaxSize().padding(24.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.Center
+        ) {
+            Text(
+                if (failed) "Player progress could not be loaded." else "Loading player progress…",
+                color = Color.White,
+                fontSize = 18.sp,
+                textAlign = TextAlign.Center
+            )
+            if (failed) {
+                Spacer(Modifier.height(16.dp))
+                Button(onClick = onRetry) { Text("RETRY LOAD") }
+            }
+        }
+    }
+}
+
+@Composable
+internal fun ProgressSaveNotice(
+    status: SaveStatus,
+    onRetry: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    if (status == SaveStatus.IDLE) return
+    Column(
+        modifier = modifier.fillMaxWidth(),
+        horizontalAlignment = Alignment.CenterHorizontally
+    ) {
+        Text(
+            when (status) {
+                SaveStatus.IDLE -> ""
+                SaveStatus.SAVING -> "Saving completed progress…"
+                SaveStatus.SAVED -> "Completed progress saved"
+                SaveStatus.FAILED -> "Completed progress could not be saved. Keep the app open and retry."
+            },
+            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
+            color = if (status == SaveStatus.FAILED) Color(0xFFFFD166) else Color(0xFF62E6B5),
+            fontSize = if (status == SaveStatus.FAILED) 14.sp else 12.sp,
+            textAlign = TextAlign.Center
+        )
+        if (status == SaveStatus.FAILED) {
+            Spacer(Modifier.height(8.dp))
+            Button(onClick = onRetry) { Text("RETRY SAVE") }
         }
     }
 }
