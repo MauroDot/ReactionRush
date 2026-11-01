@@ -17,20 +17,26 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.assertCountEquals
 import androidx.compose.ui.test.assertIsDisplayed
+import androidx.compose.ui.test.assertHeightIsAtLeast
+import androidx.compose.ui.test.assertWidthIsAtLeast
 import androidx.compose.ui.test.click
 import androidx.compose.ui.semantics.getOrNull
 import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.test.SemanticsNodeInteraction
 import androidx.compose.ui.test.hasAnyAncestor
 import androidx.compose.ui.test.hasAnyDescendant
 import androidx.compose.ui.test.hasClickAction
 import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.hasTestTag
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
+import androidx.compose.ui.test.performSemanticsAction
 import androidx.compose.ui.test.performTouchInput
+import androidx.compose.ui.text.TextLayoutResult
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -220,6 +226,9 @@ class PersonalRecordsGameplayTest {
             scrollToText("+${expectedReward.totalXp} XP")
             scrollToText("MEDAL: ${PlayerProgression.medal(scores.average().roundToInt()).title}")
             assertProgressCard(totalXp)
+            if (mode.rounds > 1) {
+                scrollToText("Round ${mode.rounds}: ${scores.last()} ms")
+            }
             assertEquals(totalXp, prefs.getLong("total_xp", 0L))
 
             clickGameText("Tap to play this mode again.")
@@ -1038,6 +1047,148 @@ class PersonalRecordsGameplayTest {
         assertEquals(completed, progressSnapshot())
     }
 
+    @Test
+    fun navigationHasNamedTouchTargetsAndScrollableTextFitsTheAvailableWidth() {
+        listOf("REACTION RUSH", "TOTAL XP: 0", "LEVEL 1").forEach(::assertScrollableTextFits)
+        scrollToText("CHOOSE A MODE  ↓")
+        val chooseMode = compose.onNode(hasText("CHOOSE A MODE  ↓") and hasClickAction())
+        assertNavigationTarget(chooseMode)
+        compose.mainClock.autoAdvance = true
+        try {
+            chooseMode.performClick()
+            compose.onNodeWithTag("mode-QUICK_DRAW").assertIsDisplayed()
+        } finally {
+            compose.mainClock.autoAdvance = false
+        }
+        GameMode.entries.forEach { mode ->
+            scrollToText(mode.title)
+            assertNavigationTarget(compose.onNodeWithTag("mode-${mode.name}"))
+            assertScrollableTextFits(mode.title)
+            assertScrollableTextFits(mode.description)
+        }
+
+        scrollToText("ACHIEVEMENTS · 0 / 12")
+        assertNavigationTarget(compose.onNode(hasText("ACHIEVEMENTS · 0 / 12") and hasClickAction()))
+        openAchievements(0)
+        assertNavigationTarget(compose.onNode(hasText("‹ HOME") and hasClickAction()))
+        assertTextFits(compose.onNodeWithText("ACHIEVEMENTS", useUnmergedTree = true), "ACHIEVEMENTS")
+        Achievement.entries.forEach { achievement ->
+            assertScrollableTextFits(achievement.title)
+            assertScrollableTextFits(achievement.description)
+        }
+        goHome()
+
+        scrollToText("STATISTICS")
+        assertNavigationTarget(compose.onNode(hasText("STATISTICS") and hasClickAction()))
+        openStatistics()
+        assertNavigationTarget(compose.onNode(hasText("‹ HOME") and hasClickAction()))
+        assertTextFits(compose.onNodeWithText("STATISTICS", useUnmergedTree = true), "STATISTICS")
+        assertScrollableTextFits("No completed sessions in history yet.")
+        goHome()
+
+        val scores = completeSession(GameMode.QUICK_DRAW, 0L)
+        assertNavigationTarget(compose.onNodeWithTag("game-home"))
+        assertNavigationTarget(compose.onNodeWithTag("game-action"))
+        assertGameTitleFits("${scores.single()} ms")
+        clickGameText("Round complete. Tap for results.")
+        assertScrollableTextFits("DRAW COMPLETE")
+        assertScrollableTextFits("MEDAL: ${PlayerProgression.medal(scores.single()).title}")
+        assertScrollableTextFits("+${PlayerProgression.reward(GameMode.QUICK_DRAW, scores).totalXp} XP")
+        assertProgressCard(prefs.getLong("total_xp", 0L))
+        awaitCompletedProgressSaved()
+        goHome()
+
+        val entry = savedSessions().single()
+        openStatistics()
+        compose.mainClock.autoAdvance = true
+        try {
+            compose.onNodeWithTag("session-${entry.sessionId}").performScrollTo()
+            assertNavigationTarget(compose.onNodeWithTag("session-${entry.sessionId}"))
+        } finally {
+            compose.mainClock.autoAdvance = false
+        }
+        openSessionDetails(entry)
+        assertNavigationTarget(compose.onNode(hasText("‹ STATISTICS") and hasClickAction()))
+        assertTextFits(compose.onNodeWithText("SESSION DETAILS", useUnmergedTree = true), "SESSION DETAILS")
+        listOf("Mode: ${entry.mode.title}", "Average: ${entry.averageTimeMs} ms", "XP earned: ${entry.xpEarned}")
+            .forEach(::assertScrollableTextFits)
+        compose.onNodeWithText("‹ STATISTICS").performClick()
+        settle()
+        goHome()
+        assertEquals(1L, prefs.getLong("completed_sessions", 0L))
+    }
+
+    @Test
+    fun everyModeKeepsCriticalReactionAndInterruptionStatesReadable() {
+        GameMode.entries.forEach { mode ->
+            selectMode(mode)
+            assertNavigationTarget(compose.onNodeWithTag("game-home"))
+            assertGameTitleFits(mode.title)
+            clickGameText("Tap to begin.")
+            assertGameTitleFits("WAIT…")
+            clickGameText("Don't tap until it turns green.")
+            assertGameTitleFits("TOO SOON!")
+            clickGameText("False start! This round doesn't count.")
+            advanceToGreen()
+            assertGameTitleFits("TAP!")
+            pauseAndResume()
+            assertInterrupted()
+            assertGameTitleFits("SESSION INTERRUPTED")
+            clickGameText("Tap to restart this mode.")
+            assertGameTitleFits("WAIT…")
+            goHome()
+        }
+        assertEquals(0, prefs.getInt("attempts", 0))
+        assertEquals(0L, prefs.getLong("total_xp", 0L))
+        assertTrue(savedSessions().isEmpty())
+    }
+
+    private fun assertNavigationTarget(node: SemanticsNodeInteraction) {
+        node.assertIsDisplayed().assertWidthIsAtLeast(48.dp).assertHeightIsAtLeast(48.dp)
+        val semantics = node.fetchSemanticsNode()
+        assertTrue("Navigation must expose an action", semantics.config.contains(SemanticsActions.OnClick))
+        val name = semantics.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text }
+            ?: semantics.config.getOrNull(SemanticsProperties.ContentDescription)?.joinToString()
+        assertFalse("Navigation must have an accessible name", name.isNullOrBlank())
+    }
+
+    private fun assertScrollableTextFits(text: String) {
+        scrollToText(text)
+        assertTextFits(compose.onNodeWithText(text, useUnmergedTree = true), text)
+    }
+
+    private fun assertGameTitleFits(text: String) {
+        val node = compose.onNode(
+            hasText(text) and hasAnyAncestor(hasTestTag("game-action")), useUnmergedTree = true
+        )
+        node.assertIsDisplayed()
+        assertTextFits(node, text)
+        val semantics = node.fetchSemanticsNode()
+        assertTrue("Critical state text is vertically clipped: $text",
+            semantics.boundsInRoot.height >= semantics.size.height - 1f)
+        assertTrue("Critical state text is horizontally clipped: $text",
+            semantics.boundsInRoot.width >= semantics.size.width - 1f)
+    }
+
+    private fun assertTextFits(node: SemanticsNodeInteraction, label: String) {
+        val layouts = mutableListOf<TextLayoutResult>()
+        node.performSemanticsAction(SemanticsActions.GetTextLayoutResult) { it(layouts) }
+        assertTrue("Text has no accessible layout: $label", layouts.isNotEmpty())
+        layouts.forEach { layout ->
+            // Compose's fast text path can retain an available paragraph width wider
+            // than its intrinsic node. Check occupied lines, with one pixel for rounding.
+            assertFalse("Text exceeds its maximum lines: $label", layout.multiParagraph.didExceedMaxLines)
+            assertTrue("Text is vertically clipped: $label",
+                layout.getLineBottom(layout.lineCount - 1) <= layout.size.height + 1f)
+            repeat(layout.lineCount) { line ->
+                val occupiedWidth = layout.getLineRight(line) - layout.getLineLeft(line)
+                assertTrue("Text is horizontally clipped: $label; line=$occupiedWidth, width=${layout.size.width}",
+                    occupiedWidth <= layout.size.width + 1f)
+                assertFalse("Text is truncated: $label", layout.isLineEllipsized(line))
+            }
+        }
+    }
+
     private fun progressSnapshot(): Map<String, *> =
         prefs.all.filterKeys { !it.startsWith("active_session_") }.mapValues { (_, value) ->
             if (value is Set<*>) value.toSet() else value
@@ -1192,6 +1343,8 @@ class PersonalRecordsGameplayTest {
         val progress = PlayerProgression.levelProgress(totalXp)
         compose.onNodeWithText("LEVEL ${progress.level}").assertExists()
         compose.onNodeWithText("TOTAL XP: $totalXp").assertExists()
+        assertScrollableTextFits("LEVEL ${progress.level}")
+        assertScrollableTextFits("TOTAL XP: $totalXp")
         scrollToText(if (progress.isMaxLevel) "MAX LEVEL" else
             "${progress.xpIntoLevel} / ${progress.xpToNextLevel} XP TO LEVEL ${progress.level + 1}")
         val bar = compose.onNode(

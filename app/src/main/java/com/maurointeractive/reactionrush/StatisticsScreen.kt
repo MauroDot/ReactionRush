@@ -1,23 +1,28 @@
 package com.maurointeractive.reactionrush
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
-import androidx.compose.material3.Card
-import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
@@ -28,10 +33,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.sp
 import java.time.DateTimeException
 import java.time.Instant
 import java.time.ZoneId
@@ -51,34 +58,19 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
     }
     BackHandler { back() }
 
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B1020)) {
-        Column(modifier = Modifier.fillMaxSize().padding(24.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                TextButton(onClick = { back() }) {
-                    Text(
-                        if (selected != null) "‹ STATISTICS" else "‹ HOME",
-                        color = Color(0xFFAAB4D0),
-                        fontWeight = FontWeight.Bold
-                    )
-                }
-                Text(
-                    if (selected != null) "SESSION DETAILS" else "STATISTICS",
-                    modifier = Modifier.weight(1f),
-                    color = Color.White,
-                    fontSize = 20.sp,
-                    fontWeight = FontWeight.Black,
-                    textAlign = TextAlign.End
-                )
-            }
+    Surface(modifier = Modifier.fillMaxSize(), color = RushColors.Background) {
+        Column(modifier = Modifier.fillMaxSize().padding(horizontal = RushSpace.Xl)) {
+            ScreenHeader(
+                title = if (selected != null) "SESSION DETAILS" else "STATISTICS",
+                backLabel = if (selected != null) "‹ STATISTICS" else "‹ HOME",
+                onBack = { back() }
+            )
 
             if (selected != null) {
                 key(selected.sessionId) {
                     Column(
                         modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                        verticalArrangement = Arrangement.spacedBy(RushSpace.Md)
                     ) {
                         SessionDetails(selected)
                     }
@@ -86,17 +78,18 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
             } else {
                 Column(
                     modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(overviewScroll),
-                    verticalArrangement = Arrangement.spacedBy(12.dp)
+                    verticalArrangement = Arrangement.spacedBy(RushSpace.Md)
                 ) {
                     StatisticsHeading("SAVED PLAYER TOTALS")
                     StatisticsNote(
                         "Saved totals include older sessions beyond the retained history. " +
                             "Successful reactions also include unfinished sessions."
                     )
-                    StatisticsPanel {
+                    StatisticsPanel(accent = RushColors.Cyan) {
                         StatisticsValue("Total completed sessions", records.achievements.completedSessions.toString())
                         StatisticsValue("Lifetime successful reactions", records.lifetimeReactions.toString())
                         StatisticsValue("Global best reaction", reactionTime(records.lifetimeBestMs.takeIf { it > 0 }))
+                        HorizontalDivider(color = RushColors.Border)
                         StatisticsValue("Lifetime XP", records.totalXp.toString())
                         StatisticsValue("Current level", PlayerProgression.levelProgress(records.totalXp).level.toString())
                         StatisticsValue("Current clean-session streak", records.achievements.cleanSessionStreak.toString())
@@ -109,8 +102,8 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
                         "Mode totals include sessions completed since Statistics was added, " +
                             "including sessions no longer in history. Earlier mode totals are unavailable."
                     )
-                    StatisticsPanel {
-                        GameMode.entries.forEach { mode ->
+                    GameMode.entries.forEach { mode ->
+                        StatisticsPanel(accent = modeAccent(mode)) {
                             StatisticsValue("${mode.title} completed", (records.completedByMode[mode] ?: 0L).toString())
                             StatisticsValue(
                                 "${mode.title} personal record (${mode.recordLabel.lowercase(Locale.ROOT)})",
@@ -121,18 +114,21 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
 
                     StatisticsHeading("RETAINED HISTORY METRICS")
                     StatisticsNote("Only the most recent ${SessionHistoryCodec.MAX_SESSIONS} completed sessions are retained.")
-                    StatisticsPanel {
+                    StatisticsPanel(accent = RushColors.Mint) {
                         StatisticsValue("Retained sessions", statistics.sessionCount.toString())
                         StatisticsValue("Retained reactions", statistics.reactionCount.toString())
+                        HorizontalDivider(color = RushColors.Border)
                         StatisticsValue("Average of retained reactions", reactionTime(statistics.averageReactionMs))
                     }
                     StatisticsNote("The average includes each valid reaction equally; it excludes abandoned sessions and false starts.")
                     if (records.history.hadUnreadableEntries) {
-                        Text(
-                            "Some saved history needed recovery. Showing the sessions we could recover.",
-                            color = Color(0xFFFFD166),
-                            fontSize = 14.sp
-                        )
+                        RushPanel(accent = RushColors.Warning) {
+                            Text(
+                                "Some saved history needed recovery. Showing the sessions we could recover.",
+                                color = RushColors.Warning,
+                                style = MaterialTheme.typography.bodyMedium
+                            )
+                        }
                     }
 
                     StatisticsHeading("RECENT PERFORMANCE BY MODE")
@@ -140,22 +136,23 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
                     GameMode.entries.forEach { mode ->
                         val modeStatistics = checkNotNull(statistics.byMode[mode])
                         val trend = modeStatistics.trend
-                        StatisticsPanel {
-                            Text(mode.title, color = Color.White, fontWeight = FontWeight.Bold)
+                        StatisticsPanel(accent = modeAccent(mode)) {
+                            Text(
+                                mode.title,
+                                color = RushColors.Text,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
                             if (trend == null) {
                                 StatisticsNote("Complete 10 retained sessions in this mode to compare performance (${modeStatistics.sessionCount} / 10).")
+                                StatisticsBar(modeStatistics.sessionCount / 10f, modeAccent(mode))
                             } else {
+                                val largestAverage = maxOf(trend.recentAverageMs, trend.previousAverageMs).toFloat()
                                 StatisticsValue("Recent 5 average", reactionTime(trend.recentAverageMs))
+                                StatisticsBar(trend.recentAverageMs / largestAverage, modeAccent(mode))
                                 StatisticsValue("Previous 5 average", reactionTime(trend.previousAverageMs))
-                                Text(
-                                    when {
-                                        trend.improvementMs > 0 -> "${trend.improvementMs} ms faster"
-                                        trend.improvementMs < 0 -> "${-trend.improvementMs.toLong()} ms slower"
-                                        else -> "Unchanged average"
-                                    },
-                                    color = Color(0xFF62E6B5),
-                                    fontWeight = FontWeight.Bold
-                                )
+                                StatisticsBar(trend.previousAverageMs / largestAverage, RushColors.Subtle)
+                                TrendStatus(trend)
                             }
                         }
                     }
@@ -163,30 +160,54 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
                     StatisticsHeading("SESSION HISTORY (NEWEST FIRST)")
                     StatisticsNote("Ordered by completion. Dates use this device's time zone; changing its clock does not reorder history.")
                     if (records.history.sessions.isEmpty()) {
-                        Text("No completed sessions in history yet.", color = Color.White, fontSize = 16.sp)
-                        StatisticsNote("Finish any mode to record a session. Older sessions have no saved details.")
+                        RushPanel(accent = RushColors.Cyan) {
+                            PulseMark(modifier = Modifier.size(32.dp), accent = RushColors.Cyan)
+                            Text(
+                                "No completed sessions in history yet.",
+                                color = RushColors.Text,
+                                style = MaterialTheme.typography.titleMedium,
+                                fontWeight = FontWeight.Bold
+                            )
+                            StatisticsNote("Finish any mode to record a session. Older sessions have no saved details.")
+                        }
                     } else {
                         records.history.sessions.forEach { entry ->
-                            Card(
+                            RushPanel(
                                 modifier = Modifier.fillMaxWidth()
                                     .testTag("session-${entry.sessionId}")
-                                    .clickable { selectedSessionId = entry.sessionId },
-                                colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35)),
-                                shape = RoundedCornerShape(18.dp)
+                                    .clickable(
+                                        role = Role.Button,
+                                        onClickLabel = "View session details"
+                                    ) { selectedSessionId = entry.sessionId },
+                                accent = modeAccent(entry.mode)
                             ) {
-                                Column(
-                                    modifier = Modifier.fillMaxWidth().padding(16.dp),
-                                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                                ) {
-                                    Text(entry.mode.title, color = Color.White, fontSize = 17.sp, fontWeight = FontWeight.Bold)
-                                    StatisticsNote(completionTime(entry.completedAtMillis))
-                                    Text("Average: ${entry.averageTimeMs} ms · ${entry.medal.title}", color = Color(0xFFD6DCF0), fontSize = 14.sp)
-                                    Text("View session details", color = Color(0xFF62E6B5), fontSize = 13.sp)
+                                Row(verticalAlignment = Alignment.CenterVertically) {
+                                    PulseMark(modifier = Modifier.size(24.dp), accent = modeAccent(entry.mode))
+                                    Spacer(Modifier.width(RushSpace.Md))
+                                    Text(
+                                        entry.mode.title,
+                                        modifier = Modifier.weight(1f),
+                                        color = RushColors.Text,
+                                        style = MaterialTheme.typography.titleMedium,
+                                        fontWeight = FontWeight.Bold
+                                    )
                                 }
+                                StatisticsNote(completionTime(entry.completedAtMillis))
+                                Text(
+                                    "Average: ${entry.averageTimeMs} ms · ${entry.medal.title}",
+                                    color = RushColors.Text,
+                                    style = MaterialTheme.typography.bodyMedium
+                                )
+                                Text(
+                                    "View session details",
+                                    color = RushColors.Mint,
+                                    style = MaterialTheme.typography.labelLarge,
+                                    fontWeight = FontWeight.Bold
+                                )
                             }
                         }
                     }
-                    Spacer(Modifier.height(8.dp))
+                    Spacer(Modifier.height(RushSpace.Xl))
                 }
             }
         }
@@ -195,7 +216,16 @@ internal fun StatisticsScreen(records: PersonalRecords, onBackHome: () -> Unit) 
 
 @Composable
 private fun SessionDetails(entry: SessionHistoryEntry) {
-    StatisticsPanel {
+    StatisticsPanel(accent = modeAccent(entry.mode)) {
+        SectionLabel("SESSION AVERAGE")
+        Text(
+            "${entry.averageTimeMs} ms",
+            color = RushColors.Text,
+            style = MaterialTheme.typography.displaySmall,
+            fontWeight = FontWeight.Black
+        )
+        MedalBadge(entry.medal)
+        HorizontalDivider(color = RushColors.Border)
         StatisticsValue("Mode", entry.mode.title)
         StatisticsValue("Completed", completionTime(entry.completedAtMillis))
         StatisticsValue("Best", reactionTime(entry.bestTimeMs))
@@ -208,40 +238,86 @@ private fun SessionDetails(entry: SessionHistoryEntry) {
     StatisticsHeading("ROUND SCORES")
     StatisticsPanel {
         entry.roundScoresMs.forEachIndexed { index, score ->
-            Text("Round ${index + 1}: $score ms", color = Color.White, fontSize = 15.sp)
+            Surface(color = RushColors.SurfaceRaised, shape = RushShapes.Small) {
+                Text(
+                    "Round ${index + 1}: $score ms",
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                        .padding(horizontal = RushSpace.Md, vertical = RushSpace.Md),
+                    color = if (score == entry.bestTimeMs) RushColors.Mint else RushColors.Text,
+                    style = MaterialTheme.typography.bodyLarge,
+                    fontWeight = if (score == entry.bestTimeMs) FontWeight.Bold else FontWeight.Medium
+                )
+            }
         }
     }
-    Spacer(Modifier.height(8.dp))
+    Spacer(Modifier.height(RushSpace.Xl))
 }
 
 @Composable
-private fun StatisticsPanel(content: @Composable () -> Unit) {
-    Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35)),
-        shape = RoundedCornerShape(18.dp)
-    ) {
-        Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
-        ) { content() }
-    }
+private fun StatisticsPanel(accent: Color? = null, content: @Composable ColumnScope.() -> Unit) {
+    RushPanel(modifier = Modifier.fillMaxWidth(), accent = accent, content = content)
 }
 
 @Composable
 private fun StatisticsHeading(text: String) {
-    Spacer(Modifier.height(6.dp))
-    Text(text, color = Color(0xFF62E6B5), fontSize = 17.sp, fontWeight = FontWeight.Black)
+    Spacer(Modifier.height(RushSpace.Md))
+    SectionLabel(text)
 }
 
 @Composable
 private fun StatisticsValue(label: String, value: String) {
-    Text("$label: $value", color = Color.White, fontSize = 14.sp)
+    Text(
+        buildAnnotatedString {
+            withStyle(SpanStyle(color = RushColors.Muted)) { append("$label: ") }
+            withStyle(SpanStyle(color = RushColors.Text, fontWeight = FontWeight.Bold)) { append(value) }
+        },
+        modifier = Modifier.fillMaxWidth(),
+        style = MaterialTheme.typography.bodyMedium
+    )
 }
 
 @Composable
 private fun StatisticsNote(text: String) {
-    Text(text, color = Color(0xFFAAB4D0), fontSize = 13.sp)
+    Text(text, color = RushColors.Muted, style = MaterialTheme.typography.bodySmall)
+}
+
+@Composable
+private fun StatisticsBar(fraction: Float, accent: Color) {
+    Box(
+        modifier = Modifier.fillMaxWidth().height(RushSpace.Xs)
+            .background(RushColors.SurfaceRaised, RushShapes.Pill)
+    ) {
+        Box(
+            Modifier.fillMaxWidth(fraction.coerceIn(0f, 1f)).height(RushSpace.Xs)
+                .background(accent, RushShapes.Pill)
+        )
+    }
+}
+
+@Composable
+private fun TrendStatus(trend: PerformanceTrend) {
+    val accent = when {
+        trend.improvementMs > 0 -> RushColors.Mint
+        trend.improvementMs < 0 -> RushColors.Warning
+        else -> RushColors.Muted
+    }
+    Surface(
+        color = accent.copy(alpha = 0.1f),
+        shape = RushShapes.Pill,
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.3f))
+    ) {
+        Text(
+            when {
+                trend.improvementMs > 0 -> "${trend.improvementMs} ms faster"
+                trend.improvementMs < 0 -> "${-trend.improvementMs.toLong()} ms slower"
+                else -> "Unchanged average"
+            },
+            modifier = Modifier.padding(horizontal = RushSpace.Md, vertical = RushSpace.Sm),
+            color = accent,
+            style = MaterialTheme.typography.labelLarge,
+            fontWeight = FontWeight.Bold
+        )
+    }
 }
 
 private fun reactionTime(value: Int?): String = value?.let { "$it ms" } ?: "—"
