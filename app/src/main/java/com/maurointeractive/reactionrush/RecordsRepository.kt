@@ -41,6 +41,33 @@ class RecordsRepository(
 
     fun retrySave() = completionPersistence.retry()
 
+    /** Read after preferences hydration, using the same file/lock as player records. */
+    fun loadAudioSettings(): AudioSettings = synchronized(prefs) {
+        AudioSettings.fromPreferences(prefs.all)
+    }
+
+    /** Settings use the existing asynchronous durability checkpoint; no gameplay is replayed. */
+    fun saveAudioSettings(settings: AudioSettings): AudioSettings {
+        val normalized = settings.normalized()
+        val changed = synchronized(prefs) {
+            val saved = prefs.all
+            if (normalized.savedValues().all { (key, value) -> saved[key] == value }) {
+                false
+            } else {
+                prefs.edit {
+                    putBoolean(AudioSettings.MUSIC_ENABLED, normalized.musicEnabled)
+                    putFloat(AudioSettings.MUSIC_VOLUME, normalized.musicVolume)
+                    putBoolean(AudioSettings.SFX_ENABLED, normalized.sfxEnabled)
+                    putFloat(AudioSettings.SFX_VOLUME, normalized.sfxVolume)
+                    putBoolean(AudioSettings.HAPTICS_ENABLED, normalized.hapticsEnabled)
+                }
+                true
+            }
+        }
+        if (changed) completionPersistence.checkpoint()
+        return normalized
+    }
+
     private var cachedHistorySource: Any? = null
     private var cachedHistoryHadKey = false
     private var cachedHistory: SessionHistory? = null

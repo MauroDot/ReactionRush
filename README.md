@@ -271,6 +271,110 @@ Two narrowly scoped resource lint annotations document platform-specific choices
 
 Generated screenshots, native drawable previews, test logs, and the compiled-resource audit are local artifacts under the ignored `app/build/qa-rr005a/` directory. Native drawable previews verify rendering of the packaged assets; they are not recordings of operating-system startup animations.
 
+## RR-005B: Audio and haptics
+
+### Approved assets
+
+The runtime package is `ReactionRush_RR005B_Android_Assets_Only.zip`, SHA-256
+`A0ED0C54E2E3DB35A66BB066C8ECD93BC6DA91CC242FA53ACB85EFC9D8F9EACD`.
+The user approved all 20 exact playback files on November 1, 2026, superseding the
+package manifest's older pending-listening markers for Classic, Endurance, and Results.
+All 20 source hashes match the manifest, all fully decoded with the local FFmpeg
+decoder, and runtime copies retain those bytes unchanged. Five OGG tracks and fifteen
+WAV files total 8,362,169 bytes. Original music WAV masters are not runtime resources;
+the source ZIP and any separately retained masters remain untouched.
+
+`AudioAssets.kt` catalogs each resource's source path, duration, and SHA-256. The GO WAV
+is preserved as a **reserved, inactive resource**: it has no playable event mapping and
+is not preloaded. There is no audio-assisted gameplay mode or separate scoring path.
+
+### Playback and ownership
+
+`AudioController` separates testable event policy from `AndroidAudioBackend`'s native
+playback. One controller is remembered after saved preferences load, survives ordinary
+recomposition, and is disposed with its app composition. Screen owners, actual session
+tokens, round ordering, and once-only completion events reject duplicate or stale cues.
+
+Framework `MediaPlayer` uses asynchronous preparation and native looping for the five
+local music tracks. `SoundPool` preloads nine active effects and five stingers; the
+largest decoded sample is 672,000 bytes, below its per-sample limit. This deliberately
+uses the existing Android platform rather than adding Media3 for a small local-only
+playlist: no production dependency, background service, permission, or build-tool
+change is required. RR-005B physical-device acceptance passed 10/10, as confirmed by
+the user during C2 closeout, including all approved assets and C1 music continuity.
+
+Music maps to Menu (including Achievements, Statistics, and Settings), each mode's
+soundtrack throughout READY, WAITING, GO, nonfinal results, false starts, and retries,
+and Results only after a verified final reaction. Within an uninterrupted game mode,
+the same music player and playhead continue without a restart. Preparation feedback
+occurs only on READY. Before WAITING begins, effects, queued celebrations, and
+preparation haptics are canceled; music and its audio focus remain active when music
+is audible. Transient sounds stay suppressed through WAITING and GO. GO makes no
+music operation: no pause, fade, volume change, seek, track switch, or focus request.
+Independent settings and lifecycle/focus events retain their existing behavior.
+The monotonic GO timestamp and reaction calculation are unchanged; response sounds
+run only after the existing reaction transaction. The existing 35 ms GO vibration
+remains optional under Haptics and runs after timestamp capture; GO has no sound effect.
+
+At most four short streams play simultaneously. Celebrations use one exclusive,
+serialized lead-effect/stinger pair with this precedence: level-up, session/level
+milestone achievement, other achievement, personal record, medal, ordinary completion.
+Higher-priority simultaneous celebrations supersede lower ones. Music ducks during
+the celebration. Unloaded effects are dropped, never deferred into a later game phase.
+
+Foreground/window-focus loss stops playback and haptics and invalidates queued events.
+Audio-focus loss or headphone-disconnection also stops sound. Regaining focus can
+restore eligible music, never old effects; a lifecycle-interrupted session stays silent
+until a deliberate new attempt. Native preparation and delayed stinger callbacks are
+generation-checked. Release is terminal and idempotent.
+
+### Persistent controls
+
+Home's **AUDIO & HAPTICS** screen offers independent Music and Sound effects toggles
+and volumes, plus Haptics. Defaults are music 45%, effects/celebrations 70%, and haptics
+enabled. Controls use the RR-005A design system, accessible toggle rows and labeled
+sliders, and a scrollable layout. Device system volume/vibration policy is respected
+and never changed by the app.
+
+Five `audio_*` keys share the existing `reaction_rush` preferences file and asynchronous
+`CompletionPersistence` writer. Invalid types/non-finite volumes recover to defaults;
+finite volumes clamp to 0–100%. Playback updates immediately. Sliders persist when a
+gesture finishes; pending changes also flush on settings exit, backgrounding, and
+disposal. Switches persist immediately, and unchanged saves do not add checkpoints.
+Save failure/retry uses the existing nonblocking persistence feedback. Player-save
+migrations and completed-session transactions are unchanged. The existing documented
+SharedPreferences crash-durability limitations also apply to these settings.
+
+### Audio validation and phone acceptance
+
+Automated coverage includes event mappings, mute/volume/haptics policy, continuous
+gameplay music with timed-phase transient suppression, focus/foreground changes,
+stale owners/tokens, repeated events, celebration
+precedence, persistence/corrupt values, cleanup, all 20 packaged hashes/native media
+preparation, and native SoundPool loading. Existing gameplay/domain tests remain.
+Desktop decoding and emulator preparation do not prove audible latency or seamlessness.
+
+- Listen to several complete loops and transitions on speakers and wired/Bluetooth
+  headphones. Check volume balance, loop seams, clipping, and celebration priorities.
+- Verify each mode's music continues through READY, WAITING, GO, nonfinal results,
+  false starts, and retries without restarting. Check that GO causes no audible music
+  change or sound effect, and that preparation/celebration sounds stop before WAITING.
+- Check music mute and volume independently of effects/haptics, including zero volume,
+  rapid retries, queued celebrations, and foreground/audio-focus interruptions.
+- Exercise calls, notification shade, screen lock, headphone removal, another media
+  app, and repeated recreation. Verify no stale sound or vibration resumes.
+- Check all controls with large fonts, TalkBack, system mute/vibration settings, and
+  devices without vibration hardware. Verify settings after a cold restart.
+- Measure input/frame response and startup/scrolling/battery behavior on a midrange
+  phone. RR-005B physical-device acceptance is complete (10/10 PASS, user-confirmed
+  at C2 closeout); these checks remain useful for future regressions.
+- Retain the package's requested commercial-rights/source evidence separately before
+  production release; importing the assets is not a commercial-rights audit.
+
+Audio preparation reference: [MediaPlayer state/resources](https://developer.android.com/media/platform/mediaplayer/state-resources).
+Short-sample constraints: [SoundPool](https://developer.android.com/reference/android/media/SoundPool).
+Focus policy: [Android audio focus](https://developer.android.com/media/optimize/audio-focus).
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
