@@ -4,8 +4,6 @@ package com.maurointeractive.reactionrush
 import android.content.Context
 import android.os.Bundle
 import android.os.SystemClock
-import android.os.VibrationEffect
-import android.os.Vibrator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.BorderStroke
@@ -89,7 +87,8 @@ enum class AppScreen {
     HOME,
     GAME,
     ACHIEVEMENTS,
-    STATISTICS
+    STATISTICS,
+    SETTINGS
 }
 
 enum class GameState {
@@ -116,6 +115,8 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
     val applicationContext = LocalContext.current.applicationContext
     var repository by remember { mutableStateOf<RecordsRepository?>(null) }
     var playerRecords by remember { mutableStateOf<PersonalRecords?>(null) }
+    var audioSettings by remember { mutableStateOf(AudioSettings()) }
+    var audioSettingsDirty by remember { mutableStateOf(false) }
     var loadAttempt by remember { mutableIntStateOf(0) }
     var loadFailed by remember { mutableStateOf(false) }
     var hadUnfinishedSession by rememberSaveable { mutableStateOf(false) }
@@ -130,7 +131,7 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
             val loaded = withContext(Dispatchers.IO) {
                 val prefs = applicationContext.getSharedPreferences("reaction_rush", Context.MODE_PRIVATE)
                 val store = RecordsRepository(prefs)
-                store to store.load()
+                Triple(store, store.load(), store.loadAudioSettings())
             }
             // Preferences are hydrated now. This memory-only invalidation runs after
             // cancellation checks on Main, so an obsolete startup cannot clear a newer game.
@@ -139,6 +140,7 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
             hadUnfinishedSession = false
             repository = loaded.first
             playerRecords = loaded.second
+            audioSettings = loaded.third
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
@@ -153,10 +155,37 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
         return
     }
     val saveStatus by recordsRepository.saveStatus.collectAsState()
+    // One owner for the loaded application, never one player per recomposition or round.
+    val audio = remember(recordsRepository) {
+        AudioController(AndroidAudioBackend(applicationContext), audioSettings)
+    }
+    fun persistAudioSettings() {
+        if (audioSettingsDirty) {
+            recordsRepository.saveAudioSettings(audioSettings)
+            audioSettingsDirty = false
+        }
+    }
+    val savePendingAudioSettings by rememberUpdatedState(::persistAudioSettings)
+    DisposableEffect(audio, foregroundMonitor) {
+        val unregister = foregroundMonitor.observe { foreground ->
+            audio.setForeground(foreground)
+            if (!foreground) savePendingAudioSettings()
+        }
+        onDispose {
+            unregister()
+            savePendingAudioSettings()
+            audio.release()
+        }
+    }
+    SideEffect {
+        audio.updateSettings(audioSettings)
+        if (screen != AppScreen.GAME) audio.showMenu()
+    }
 
     Column(Modifier.fillMaxSize().background(RushColors.Background)) {
         if (screen != AppScreen.GAME && saveStatus != SaveStatus.IDLE) {
-            ProgressSaveNotice(saveStatus, recordsRepository::retrySave, Modifier.padding(16.dp))
+            ProgressSaveNotice(saveStatus, recordsRepository::retrySave, Modifier.padding(16.dp),
+                settings = screen == AppScreen.SETTINGS)
         }
         Box(Modifier.weight(1f)) {
             when (screen) {
@@ -165,8 +194,9 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
                         records = records,
                         interrupted = showInterruptedNotice,
                         onDismissInterruption = { showInterruptedNotice = false },
-                        onAchievementsSelected = { screen = AppScreen.ACHIEVEMENTS },
-                        onStatisticsSelected = { screen = AppScreen.STATISTICS },
+                        onAchievementsSelected = { audio.navigate(); screen = AppScreen.ACHIEVEMENTS },
+                        onStatisticsSelected = { audio.navigate(); screen = AppScreen.STATISTICS },
+                        onSettingsSelected = { audio.navigate(); screen = AppScreen.SETTINGS },
                         onModeSelected = { mode ->
                             selectedMode = mode
                             screen = AppScreen.GAME
@@ -179,6 +209,7 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
                         mode = selectedMode,
                         records = records,
                         foregroundMonitor = foregroundMonitor,
+                        audio = audio,
                         saveStatus = saveStatus,
                         onRetrySave = recordsRepository::retrySave,
                         onStartSession = { mode ->
@@ -203,11 +234,25 @@ private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
                 }
 
                 AppScreen.ACHIEVEMENTS -> {
-                    AchievementsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+                    AchievementsScreen(records = records, onBackHome = { audio.navigate(); screen = AppScreen.HOME })
                 }
 
                 AppScreen.STATISTICS -> {
-                    StatisticsScreen(records = records, onBackHome = { screen = AppScreen.HOME })
+                    StatisticsScreen(records = records, onBackHome = { audio.navigate(); screen = AppScreen.HOME })
+                }
+
+                AppScreen.SETTINGS -> {
+                    AudioSettingsScreen(
+                        settings = audioSettings,
+                        onSettingsChanged = { updated ->
+                            val normalized = updated.normalized()
+                            if (audioSettings != normalized) audioSettingsDirty = true
+                            audioSettings = normalized
+                            audio.updateSettings(audioSettings)
+                        },
+                        onSaveSettings = ::persistAudioSettings,
+                        onBackHome = { persistAudioSettings(); audio.navigate(); screen = AppScreen.HOME }
+                    )
                 }
             }
         }
@@ -221,6 +266,7 @@ private fun HomeScreen(
     onDismissInterruption: () -> Unit,
     onAchievementsSelected: () -> Unit,
     onStatisticsSelected: () -> Unit,
+    onSettingsSelected: () -> Unit,
     onModeSelected: (GameMode) -> Unit
 ) {
     val largeText = LocalDensity.current.fontScale > 1.3f
@@ -279,6 +325,11 @@ private fun HomeScreen(
                     shape = RushShapes.Small, border = BorderStroke(1.dp, RushColors.Border),
                     colors = ButtonDefaults.outlinedButtonColors(contentColor = RushColors.Cyan)
                 ) { Text("STATISTICS", style = MaterialTheme.typography.labelLarge) }
+                OutlinedButton(
+                    onClick = onSettingsSelected, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RushShapes.Small, border = BorderStroke(1.dp, RushColors.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RushColors.Muted)
+                ) { Text("AUDIO & HAPTICS", style = MaterialTheme.typography.labelLarge) }
                 Box(Modifier.onGloballyPositioned { modeSectionOffset = it.positionInParent().y.roundToInt() }) {
                     SectionLabel("SELECT MODE")
                 }
@@ -327,6 +378,7 @@ private fun GameScreen(
     mode: GameMode,
     records: PersonalRecords,
     foregroundMonitor: ForegroundMonitor,
+    audio: AudioController,
     saveStatus: SaveStatus,
     onRetrySave: () -> Unit,
     onStartSession: (GameMode) -> String,
@@ -336,8 +388,8 @@ private fun GameScreen(
     onReaction: (String, GameMode, Int, List<Int>) -> ReactionUpdate,
     onBackHome: () -> Unit
 ) {
-    val context = LocalContext.current
     val roundScope = rememberCoroutineScope()
+    val audioOwner = remember(mode, audio) { Any() }
     val gameInteraction = remember { MutableInteractionSource() }
     val timing = remember(mode) { RoundTimingGuard() }
 
@@ -362,24 +414,14 @@ private fun GameScreen(
         mutableIntStateOf(0)
     }
 
-    fun buzz(ms: Long) {
-        val vibrator = context.getSystemService(Vibrator::class.java)
-        vibrator?.vibrate(
-            VibrationEffect.createOneShot(
-                ms,
-                VibrationEffect.DEFAULT_AMPLITUDE
-            )
-        )
-    }
-
     fun interruptSession() {
         interactionEpoch = Any()
         waitJob?.cancel()
         waitJob = null
         timing.cancel()
         roundTicket = null
-        context.getSystemService(Vibrator::class.java)?.cancel()
         if (sessionId.isNotBlank() && sessionReward == null) {
+            audio.interrupt(audioOwner)
             abandonSession(sessionId)
             sessionId = ""
             sessionScores = emptyList()
@@ -395,6 +437,9 @@ private fun GameScreen(
     fun beginRound() {
         interactionEpoch = Any()
         waitJob?.cancel()
+        // Cancel transient cues before the randomized interval; keep mode music continuous.
+        // No audio operation is placed ahead of GO timestamp capture or reaction scoring.
+        audio.beginCompetitive(audioOwner, sessionId)
         val ticket = timing.beginWaiting()
         if (ticket == null) {
             interruptSession()
@@ -408,7 +453,7 @@ private fun GameScreen(
                 timing.signalGo(ticket, SystemClock.elapsedRealtime())
             ) {
                 state = GameState.GO
-                buzz(35)
+                audio.goHaptic(audioOwner)
             }
         }
     }
@@ -427,6 +472,7 @@ private fun GameScreen(
         sessionReward = null
         sessionId = ""
         state = GameState.READY
+        audio.ready(audioOwner, mode)
     }
 
     fun startSession() {
@@ -440,7 +486,9 @@ private fun GameScreen(
         beginRound()
     }
 
-    DisposableEffect(mode, foregroundMonitor) {
+    DisposableEffect(mode, foregroundMonitor, audio) {
+        audio.enterGame(audioOwner, mode)
+        audio.select()
         val unregister = foregroundMonitor.observe { foreground ->
             val wasForeground = timing.isForeground
             timing.setForeground(foreground)
@@ -452,7 +500,7 @@ private fun GameScreen(
             unregister()
             waitJob?.cancel()
             timing.setForeground(false)
-            context.getSystemService(Vibrator::class.java)?.cancel()
+            audio.leaveGame(audioOwner)
             abandonSession(sessionId)
         }
     }
@@ -473,6 +521,8 @@ private fun GameScreen(
             sessionId != renderedSessionId
         ) return@homeTap false
         onAbandonSession(sessionId)
+        audio.showMenu()
+        audio.navigate()
         onBackHome()
         true
     }
@@ -488,7 +538,7 @@ private fun GameScreen(
                 onFalseStart(renderedSessionId)
                 if (falseStarts < Int.MAX_VALUE) falseStarts++
                 state = GameState.FALSE_START
-                buzz(90)
+                audio.falseStart(audioOwner, renderedSessionId, falseStarts)
             }
             GameState.GO -> {
                 val ticket = renderedTicket ?: return@gameTap false
@@ -503,10 +553,13 @@ private fun GameScreen(
                 isNewRecord = update.isNewRecord
                 sessionReward = update.reward
                 state = GameState.ROUND_RESULT
-                buzz(45)
+                audio.reaction(audioOwner, sessionId, currentRound, update)
             }
             GameState.ROUND_RESULT -> {
-                if (currentRound >= mode.rounds) state = GameState.SESSION_RESULT
+                if (currentRound >= mode.rounds) {
+                    state = GameState.SESSION_RESULT
+                    audio.showResults(audioOwner)
+                }
                 else {
                     currentRound++
                     beginRound()
@@ -918,7 +971,8 @@ private fun StartupScreen(failed: Boolean, onRetry: () -> Unit) {
 internal fun ProgressSaveNotice(
     status: SaveStatus,
     onRetry: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    settings: Boolean = false
 ) {
     if (status == SaveStatus.IDLE) return
     Column(
@@ -931,9 +985,10 @@ internal fun ProgressSaveNotice(
         Text(
             when (status) {
                 SaveStatus.IDLE -> ""
-                SaveStatus.SAVING -> "Saving completed progress…"
-                SaveStatus.SAVED -> "Completed progress saved"
-                SaveStatus.FAILED -> "Completed progress could not be saved. Keep the app open and retry."
+                SaveStatus.SAVING -> if (settings) "Saving audio settings…" else "Saving completed progress…"
+                SaveStatus.SAVED -> if (settings) "Audio settings saved" else "Completed progress saved"
+                SaveStatus.FAILED -> if (settings) "Audio settings could not be saved. Keep the app open and retry."
+                    else "Completed progress could not be saved. Keep the app open and retry."
             },
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
             color = if (status == SaveStatus.FAILED) RushColors.Gold else RushColors.Mint,
