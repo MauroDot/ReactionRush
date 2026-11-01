@@ -1,0 +1,10 @@
+<!--
+    Adaptive icons are supported at this app's minimum API 26. The API 33 variant
+    supplies monochrome; keeping it there avoids newer tags in older platform parsers.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MonochromeLauncherIcon">
+    <background android:drawable="@drawable/rr_launcher_background" />
+    <foreground android:drawable="@drawable/rr_pulse_mark" />
+</adaptive-icon>

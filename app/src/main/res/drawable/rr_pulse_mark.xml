@@ -1,0 +1,21 @@
+<!--
+    Original Reaction Rush artwork. Viewport/layer: 108 x 108; center: (54,54).
+    The split ring has radius 27 and stroke 4.5, so all artwork fits inside a
+    58.5-diameter circle. This stays within the adaptive icon's central 66 safe zone
+    (21..87), including its stroke caps. Keep this silhouette in the splash/mono assets.
+-->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <path
+        android:fillColor="@android:color/transparent"
+        android:strokeColor="@color/rr_cyan"
+        android:strokeWidth="4.5"
+        android:strokeLineCap="round"
+        android:pathData="M79.96,46.56 A27,27 0,0 0,28.04 46.56 M28.04,61.44 A27,27 0,0 0,79.96 61.44" />
+    <path
+        android:fillColor="@color/rr_mint"
+        android:pathData="M60.5,30 L40.5,57 L52,57 L47,78 L68.5,49 L57,49 Z" />
+</vector>

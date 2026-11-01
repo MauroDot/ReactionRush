@@ -1,0 +1,9 @@
+<!-- Pre-Android 12 starting window: same 288dp canvas/156dp visible mark as native splash. -->
+<layer-list xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:drawable="@color/rr_navy" />
+    <item
+        android:width="288dp"
+        android:height="288dp"
+        android:gravity="center"
+        android:drawable="@drawable/rr_pulse_mark" />
+</layer-list>

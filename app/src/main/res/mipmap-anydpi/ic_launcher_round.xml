@@ -1,0 +1,7 @@
+<!-- API 26+ adaptive round icon; its monochrome layer is supplied by the API 33 variant. -->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    tools:ignore="MonochromeLauncherIcon">
+    <background android:drawable="@drawable/rr_launcher_background" />
+    <foreground android:drawable="@drawable/rr_pulse_mark" />
+</adaptive-icon>

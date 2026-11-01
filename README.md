@@ -212,6 +212,65 @@ Android can itself wait for pending `apply()` writes during lifecycle transition
 - On a disposable test device or controlled test harness, fail a save. Verify visible failure feedback, responsive UI, retry, and unchanged progression after retry.
 - Check small-screen interruption/result layouts, large fonts, Back navigation, and accessibility announcements. Actual call, overlay, storage-hardware, and power-loss behavior requires physical-device acceptance.
 
+## RR-005A: Visual identity and UI polish
+
+### Design system
+
+`DesignSystem.kt` defines the shared Material 3 dark theme and reusable panels, section labels, wrapping navigation headers, medal badges, and original pulse/target mark.
+
+| Token | Value / purpose |
+| --- | --- |
+| Background | `#0B1020`, deep navy |
+| Surface / raised surface | `#151D35` / `#1C2844` |
+| Primary / secondary / achievement | `#62E6B5` mint / `#4DA3FF` cyan / `#FFB454` gold |
+| Text / muted / secondary text | `#F5F7FF` / `#AAB8D6` / `#95A5C6` |
+| Border / GO background / false-start text | `#33415E` / `#0B6549` / `#FF9AA8` |
+| Spacing | 4, 8, 12, 16, 24, 32 dp |
+| Shapes | 24 dp panels, 16 dp compact cards, pill badges |
+| Type | System sans for navigation/body; monospace for reaction values and XP rewards |
+| Hierarchy | 44 sp branding, 24–30 sp headings, 14–16 sp body, 10–12 sp supporting labels; sizes adapt for large fonts |
+
+Home emphasizes player progression and personal statistics, with numbered mode cards: cyan Quick Draw, mint Classic Rush, and gold Endurance Rush. Achievements use explicit status pills and milestone progress. Statistics retain their lifetime/history scope labels, add compact comparative trend bars alongside numeric values, and provide readable session detail and round cards. All original scoring and progress calculations remain in their existing domain classes.
+
+### Timing, motion, and accessibility
+
+The GO background, title, and timing transition change immediately. No entrance, crossfade, color tween, or result animation sits between a timer signal and the GO display. Timed rounds retain the RR-004E monotonic clock, opaque tickets, lifecycle interruption policy, and immutable rendered input actions.
+
+Home uses a finite 180 ms opacity/translation entrance. Mode cards use a 90 ms compositor-only press response; the click is handled immediately. Compose's platform motion-duration scale controls these finite animations, including disabled system animations. There are no looping decorative animations or animated progression counters.
+
+All screens share safe-drawing insets for system bars and cutouts. Navigation uses at least 48 dp touch targets. Large text stacks Home statistics, uses wrapping screen headers, and switches gameplay to a compact header so the reaction field retains space. Results, achievements, statistics, and round details remain scrollable. Text is never ellipsized to hide progression values. GO uses bright text throughout for contrast on green; false starts and interruptions have distinct labels and supporting instructions. Decorative marks and chart rails carry no unique information; text supplies state, values, units, and navigation meaning. Existing polite record/unlock/save announcements remain.
+
+### Original launcher and splash artwork
+
+The original mint lightning pulse inside a split cyan target ring is authored entirely as vectors, with a matching in-app Canvas mark. No third-party artwork, fonts, images, permissions, network services, or production dependencies were added. The vectors are the implemented identity, not temporary placeholder art.
+
+Adaptive launcher icons work from the existing minimum API 26. API 33 resource variants add a monochrome themed icon. The 108-unit foreground canvas keeps all visible artwork inside a 58.5-unit diameter, within the central 66-unit safe zone. The static native Android 12+ splash uses a 288 dp icon canvas with 156 dp visible artwork; older Android uses a matching centered launch background. There is no splash Activity or artificial hold time.
+
+Two narrowly scoped resource lint annotations document platform-specific choices: monochrome is provided in the API 33 variants, and the native splash uses the platform's 288 dp canvas rather than the generic small-vector recommendation. API/toolchain versions and the existing portrait policy are unchanged. Launcher/store marketing artwork, screenshots for Play, release signing, and physical/OEM acceptance should be reviewed during release preparation.
+
+### Manual visual acceptance checklist
+
+- Check normal and small physical screens, including large text, display scaling, gesture navigation, and three-button navigation. Confirm every mode and screen can be reached without clipped text or controls.
+- Complete all three modes and review records, medals, XP, level-up feedback, unlocks, history, and round details. Compare values after recreation and a cold restart.
+- Exercise WAITING, GO, false-start retry, and interrupted-session restart. Confirm GO appears immediately and the RR-004E interruption behavior is unchanged.
+- Disable system animations and check that Home and mode actions remain usable. Review TalkBack order, button labels, progress announcements, and status text on a physical device.
+- Check launcher masks, themed icons, and cold/warm splash transitions on API 26, 31, 33+, and representative OEM launchers. Check smooth scrolling and input response on a midrange physical device.
+
+### RR-005A file map
+
+| Status | Files |
+| --- | --- |
+| Modified UI | `MainActivity.kt`, `AchievementsScreen.kt`, `StatisticsScreen.kt` in `app/src/main/java/com/maurointeractive/reactionrush/` |
+| Added design system | `app/src/main/java/com/maurointeractive/reactionrush/DesignSystem.kt` |
+| Modified Android configuration | `app/src/main/AndroidManifest.xml`, `app/src/main/res/values/styles.xml` |
+| Added palette and splash theme | `app/src/main/res/values/colors.xml`, `app/src/main/res/values-v31/styles.xml` |
+| Added original vector resources | `app/src/main/res/drawable/rr_launch_background.xml`, `rr_launcher_background.xml`, `rr_pulse_mark.xml`, `rr_pulse_mark_monochrome.xml`, `rr_splash_icon.xml` |
+| Added launcher variants | `ic_launcher.xml` and `ic_launcher_round.xml` in both `app/src/main/res/mipmap-anydpi/` and `app/src/main/res/mipmap-anydpi-v33/` |
+| Modified regression tests | `app/src/androidTest/java/com/maurointeractive/reactionrush/PersonalRecordsGameplayTest.kt` |
+| Modified documentation | `README.md` |
+
+Generated screenshots, native drawable previews, test logs, and the compiled-resource audit are local artifacts under the ignored `app/build/qa-rr005a/` directory. Native drawable previews verify rendering of the packaged assets; they are not recordings of operating-system startup animations.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 

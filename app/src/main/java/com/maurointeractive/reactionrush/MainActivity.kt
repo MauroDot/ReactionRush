@@ -8,23 +8,33 @@ import android.os.VibrationEffect
 import android.os.Vibrator
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.positionInParent
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.semantics.LiveRegionMode
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.liveRegion
 import androidx.compose.ui.semantics.onClick
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -94,6 +104,15 @@ enum class GameState {
 
 @Composable
 fun ReactionRushApp(foregroundMonitor: ForegroundMonitor) {
+    RushTheme {
+        Surface(color = RushColors.Background, modifier = Modifier.fillMaxSize()) {
+            Box(Modifier.fillMaxSize().safeDrawingPadding()) { ReactionRushContent(foregroundMonitor) }
+        }
+    }
+}
+
+@Composable
+private fun ReactionRushContent(foregroundMonitor: ForegroundMonitor) {
     val applicationContext = LocalContext.current.applicationContext
     var repository by remember { mutableStateOf<RecordsRepository?>(null) }
     var playerRecords by remember { mutableStateOf<PersonalRecords?>(null) }
@@ -135,7 +154,7 @@ fun ReactionRushApp(foregroundMonitor: ForegroundMonitor) {
     }
     val saveStatus by recordsRepository.saveStatus.collectAsState()
 
-    Column(Modifier.fillMaxSize().background(Color(0xFF0B1020))) {
+    Column(Modifier.fillMaxSize().background(RushColors.Background)) {
         if (screen != AppScreen.GAME && saveStatus != SaveStatus.IDLE) {
             ProgressSaveNotice(saveStatus, recordsRepository::retrySave, Modifier.padding(16.dp))
         }
@@ -204,221 +223,101 @@ private fun HomeScreen(
     onStatisticsSelected: () -> Unit,
     onModeSelected: (GameMode) -> Unit
 ) {
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = Color(0xFF0B1020)
-    ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .verticalScroll(rememberScrollState())
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(Modifier.height(30.dp))
-
-            Text(
-                "REACTION RUSH",
-                color = Color.White,
-                fontSize = 30.sp,
-                fontWeight = FontWeight.Black
-            )
-
-            Text(
-                "Mauro Interactive",
-                color = Color(0xFFAAB4D0),
-                fontSize = 14.sp
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            Text(
-                "TEST YOUR REFLEXES",
-                color = Color(0xFF62E6B5),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(24.dp))
-
-            if (interrupted) {
-                Card(colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35))) {
-                    Column(Modifier.padding(16.dp)) {
-                        Text(
-                            "An unfinished session was interrupted. Choose a mode to start again.",
+    val largeText = LocalDensity.current.fontScale > 1.3f
+    val homeScroll = rememberScrollState()
+    val navigationScope = rememberCoroutineScope()
+    var modeSectionOffset by remember { mutableIntStateOf(0) }
+    Surface(modifier = Modifier.fillMaxSize(), color = RushColors.Background) {
+        Entrance { entrance ->
+            Column(
+                modifier = entrance.fillMaxSize()
+                    .background(Brush.verticalGradient(listOf(Color(0xFF12223A), RushColors.Background, RushColors.Background)))
+                    .verticalScroll(homeScroll).padding(RushSpace.Xl),
+                verticalArrangement = Arrangement.spacedBy(RushSpace.Lg)
+            ) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Mauro Interactive", color = RushColors.Muted, style = MaterialTheme.typography.labelMedium)
+                        Spacer(Modifier.height(RushSpace.Sm))
+                        Text("REACTION RUSH", color = RushColors.Text,
+                            style = if (largeText) MaterialTheme.typography.headlineLarge else MaterialTheme.typography.displayLarge)
+                    }
+                    if (!largeText) PulseMark(Modifier.padding(start = RushSpace.Md).size(56.dp))
+                }
+                Text("TEST YOUR REFLEXES", color = RushColors.Mint, style = MaterialTheme.typography.labelLarge)
+                Button(
+                    onClick = { navigationScope.launch { homeScroll.animateScrollTo(modeSectionOffset) } },
+                    modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RushShapes.Small
+                ) { Text("CHOOSE A MODE  ↓", style = MaterialTheme.typography.labelLarge) }
+                if (interrupted) {
+                    RushPanel(accent = RushColors.Gold) {
+                        Text("An unfinished session was interrupted. Choose a mode to start again.",
                             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                            color = Color(0xFFFFD166),
-                            fontSize = 14.sp
-                        )
-                        TextButton(onClick = onDismissInterruption) {
-                            Text("DISMISS", color = Color(0xFFAAB4D0))
-                        }
+                            color = RushColors.Gold, style = MaterialTheme.typography.bodyMedium)
+                        TextButton(onClick = onDismissInterruption, modifier = Modifier.heightIn(min = 48.dp)) { Text("DISMISS") }
                     }
                 }
-                Spacer(Modifier.height(16.dp))
+                PlayerProgressCard(records.totalXp)
+                if (largeText) Column(verticalArrangement = Arrangement.spacedBy(RushSpace.Md)) {
+                    StatCard("OVERALL BEST", formatRecord(records.lifetimeBestMs), Modifier.fillMaxWidth())
+                    StatCard("REACTIONS", records.lifetimeReactions.toString(), Modifier.fillMaxWidth())
+                } else Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(RushSpace.Md)) {
+                    StatCard("OVERALL BEST", formatRecord(records.lifetimeBestMs), Modifier.weight(1f))
+                    StatCard("REACTIONS", records.lifetimeReactions.toString(), Modifier.weight(1f))
+                }
+                OutlinedButton(
+                    onClick = onAchievementsSelected, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RushShapes.Small, border = BorderStroke(1.dp, RushColors.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RushColors.Gold)
+                ) {
+                    Text("ACHIEVEMENTS · ${records.achievements.unlocked.size} / ${Achievement.entries.size}",
+                        style = MaterialTheme.typography.labelLarge)
+                }
+                OutlinedButton(
+                    onClick = onStatisticsSelected, modifier = Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                    shape = RushShapes.Small, border = BorderStroke(1.dp, RushColors.Border),
+                    colors = ButtonDefaults.outlinedButtonColors(contentColor = RushColors.Cyan)
+                ) { Text("STATISTICS", style = MaterialTheme.typography.labelLarge) }
+                Box(Modifier.onGloballyPositioned { modeSectionOffset = it.positionInParent().y.roundToInt() }) {
+                    SectionLabel("SELECT MODE")
+                }
+                GameMode.entries.forEach { mode ->
+                    ModeCard(mode, records.bestFor(mode), modeAccent(mode)) { onModeSelected(mode) }
+                }
+                Text("PRECISION. FOCUS. ONE MORE ROUND.", color = RushColors.Subtle,
+                    style = MaterialTheme.typography.labelSmall, modifier = Modifier.padding(vertical = RushSpace.Md))
             }
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                StatCard(
-                    "OVERALL BEST",
-                    formatRecord(records.lifetimeBestMs),
-                    Modifier.weight(1f)
-                )
-
-                StatCard(
-                    "REACTIONS",
-                    records.lifetimeReactions.toString(),
-                    Modifier.weight(1f)
-                )
-            }
-
-            Spacer(Modifier.height(28.dp))
-
-            PlayerProgressCard(records.totalXp)
-
-            Spacer(Modifier.height(12.dp))
-
-            OutlinedButton(
-                onClick = onAchievementsSelected,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF62E6B5))
-            ) {
-                Text(
-                    "ACHIEVEMENTS · ${records.achievements.unlocked.size} / ${Achievement.entries.size}",
-                    fontWeight = FontWeight.Bold
-                )
-            }
-
-            Spacer(Modifier.height(8.dp))
-
-            OutlinedButton(
-                onClick = onStatisticsSelected,
-                modifier = Modifier.fillMaxWidth(),
-                colors = ButtonDefaults.outlinedButtonColors(contentColor = Color(0xFF62E6B5))
-            ) {
-                Text("STATISTICS", fontWeight = FontWeight.Bold)
-            }
-
-            Spacer(Modifier.height(24.dp))
-
-            Text(
-                "SELECT MODE",
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFF8D98B8),
-                fontSize = 12.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            ModeCard(
-                mode = GameMode.QUICK_DRAW,
-                best = records.bestFor(GameMode.QUICK_DRAW),
-                accent = Color(0xFF4DA3FF),
-                onClick = { onModeSelected(GameMode.QUICK_DRAW) }
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            ModeCard(
-                mode = GameMode.CLASSIC_RUSH,
-                best = records.bestFor(GameMode.CLASSIC_RUSH),
-                accent = Color(0xFF62E6B5),
-                onClick = { onModeSelected(GameMode.CLASSIC_RUSH) }
-            )
-
-            Spacer(Modifier.height(12.dp))
-
-            ModeCard(
-                mode = GameMode.ENDURANCE_RUSH,
-                best = records.bestFor(GameMode.ENDURANCE_RUSH),
-                accent = Color(0xFFFFB454),
-                onClick = { onModeSelected(GameMode.ENDURANCE_RUSH) }
-            )
-
-            Spacer(Modifier.height(28.dp))
-
-            Text(
-                "More modes and challenges coming soon.",
-                color = Color(0xFF697491),
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(10.dp))
         }
     }
 }
 
 @Composable
-private fun ModeCard(
-    mode: GameMode,
-    best: Int,
-    accent: Color,
-    onClick: () -> Unit
-) {
+private fun ModeCard(mode: GameMode, best: Int, accent: Color, onClick: () -> Unit) {
+    val press = remember { MutableInteractionSource() }
     Card(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick),
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF151D35)
-        ),
-        shape = RoundedCornerShape(20.dp)
+        modifier = Modifier.fillMaxWidth().testTag("mode-${mode.name}").rushPress(press)
+            .clickable(interactionSource = press, indication = null, role = Role.Button,
+                onClickLabel = "Play ${mode.title}", onClick = onClick),
+        colors = CardDefaults.cardColors(containerColor = RushColors.Surface),
+        border = BorderStroke(1.dp, accent.copy(alpha = 0.4f)), shape = RushShapes.Card
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(18.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Box(
-                modifier = Modifier
-                    .size(10.dp)
-                    .background(accent, RoundedCornerShape(10.dp))
-            )
-
-            Spacer(Modifier.width(14.dp))
-
-            Column(
-                modifier = Modifier.weight(1f)
-            ) {
-                Text(
-                    mode.title,
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
-                )
-
-                Spacer(Modifier.height(4.dp))
-
-                Text(
-                    mode.description,
-                    color = Color(0xFFAAB4D0),
-                    fontSize = 13.sp
-                )
-
-                Spacer(Modifier.height(8.dp))
-
-                Text(
-                    "${mode.recordLabel}: ${formatRecord(best)}",
-                    color = accent,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold
-                )
+        Column(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(accent.copy(alpha = 0.08f), Color.Transparent)))
+            .padding(RushSpace.Xl), verticalArrangement = Arrangement.spacedBy(RushSpace.Md)) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                Text("0${mode.ordinal + 1} / ${when (mode) {
+                    GameMode.QUICK_DRAW -> "SINGLE SHOT"
+                    GameMode.CLASSIC_RUSH -> "FIND YOUR RHYTHM"
+                    GameMode.ENDURANCE_RUSH -> "STAY SHARP"
+                }}", modifier = Modifier.weight(1f), color = accent, style = MaterialTheme.typography.labelSmall)
+                Text("${mode.rounds} ${if (mode.rounds == 1) "ROUND" else "ROUNDS"}",
+                    color = RushColors.Muted, style = MaterialTheme.typography.labelSmall)
             }
-
-            Spacer(Modifier.width(12.dp))
-
-            Text(
-                "${mode.rounds}",
-                color = accent,
-                fontSize = 24.sp,
-                fontWeight = FontWeight.Black
-            )
+            Text(mode.title, color = RushColors.Text, style = MaterialTheme.typography.headlineMedium)
+            Text(mode.description, color = RushColors.Muted, style = MaterialTheme.typography.bodyMedium)
+            HorizontalDivider(color = accent.copy(alpha = 0.2f))
+            Text("${mode.recordLabel}: ${formatRecord(best)}", color = accent, style = MaterialTheme.typography.labelLarge)
+            Text("PLAY  →", color = RushColors.Text, style = MaterialTheme.typography.labelMedium)
         }
     }
 }
@@ -439,6 +338,7 @@ private fun GameScreen(
 ) {
     val context = LocalContext.current
     val roundScope = rememberCoroutineScope()
+    val gameInteraction = remember { MutableInteractionSource() }
     val timing = remember(mode) { RoundTimingGuard() }
 
     var state by remember(mode) { mutableStateOf(GameState.READY) }
@@ -619,340 +519,390 @@ private fun GameScreen(
     }
 
     val bg = when (state) {
-        GameState.GO -> Color(0xFF0D7A55)
-        GameState.FALSE_START -> Color(0xFF8F2735)
-        GameState.SESSION_RESULT -> Color(0xFF10172A)
-        else -> Color(0xFF0B1020)
+        GameState.GO -> RushColors.Success
+        GameState.FALSE_START -> Color(0xFF502235)
+        else -> RushColors.Background
     }
 
     Surface(
         modifier = Modifier.fillMaxSize(),
         color = bg
     ) {
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Spacer(Modifier.height(18.dp))
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Text(
-                    "‹ HOME",
-                    modifier = Modifier
-                        .semantics(mergeDescendants = true) { onClick(action = onHomeTap) }
-                        .clickable { onHomeTap() },
-                    color = Color(0xFFAAB4D0),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(Modifier.weight(1f))
-
-                Text(
-                    mode.title,
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Black
-                )
-            }
-
-            Spacer(Modifier.height(18.dp))
-
-            if (
-                state != GameState.READY &&
-                state != GameState.INTERRUPTED &&
-                state != GameState.SESSION_RESULT
-            ) {
-                Text(
-                    "ROUND $currentRound / ${mode.rounds}",
-                    color = Color(0xFF8D98B8),
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Bold
-                )
-
-                Spacer(Modifier.height(12.dp))
-            }
-
-            Row(
-                Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                StatCard(
-                    mode.recordLabel,
-                    formatRecord(records.bestFor(mode)),
-                    Modifier.weight(1f)
-                )
-
-                StatCard(
-                    "REACTIONS",
-                    records.lifetimeReactions.toString(),
-                    Modifier.weight(1f)
-                )
-            }
-
-            Spacer(Modifier.height(20.dp))
-
-            Box(
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            val compact = maxHeight < 640.dp || LocalDensity.current.fontScale > 1.2f
+            Column(
                 modifier = Modifier
-                    .weight(1f)
-                    .fillMaxWidth()
-                    .background(
-                        Color.White.copy(alpha = 0.07f),
-                        RoundedCornerShape(28.dp)
-                    )
-                    // Bind accessibility actions to the same immutable render snapshot.
-                    .semantics(mergeDescendants = true) { onClick(action = onGameTap) }
-                    .clickable { onGameTap() },
-                contentAlignment = Alignment.Center
+                    .fillMaxSize()
+                    .padding(horizontal = RushSpace.Lg, vertical = RushSpace.Sm),
+                horizontalAlignment = Alignment.CenterHorizontally
             ) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    modifier = Modifier
-                        .verticalScroll(rememberScrollState())
-                        .padding(26.dp)
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    val title = when (state) {
-                        GameState.READY -> mode.title
-                        GameState.WAITING -> "WAIT…"
-                        GameState.GO -> "TAP!"
-                        GameState.ROUND_RESULT -> "$lastScore ms"
-                        GameState.FALSE_START -> "TOO SOON!"
-                        GameState.INTERRUPTED -> "SESSION INTERRUPTED"
-                        GameState.SESSION_RESULT ->
-                            if (mode == GameMode.QUICK_DRAW)
-                                "DRAW COMPLETE"
-                            else
-                                "RUSH COMPLETE"
-                    }
+                    Text(
+                        "‹ HOME",
+                        modifier = Modifier
+                            .testTag("game-home")
+                            .semantics(mergeDescendants = true) { onClick(action = onHomeTap) }
+                            .clickable(role = Role.Button) { onHomeTap() }
+                            .sizeIn(minWidth = 64.dp, minHeight = 48.dp)
+                            .wrapContentSize(Alignment.CenterStart),
+                        color = RushColors.Text,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Bold
+                    )
 
-                    val subtitle = when (state) {
-                        GameState.READY ->
-                            "${mode.description}\n\nTap to begin."
-
-                        GameState.WAITING ->
-                            "Don't tap until it turns green."
-
-                        GameState.GO ->
-                            "NOW!"
-
-                        GameState.ROUND_RESULT ->
-                            if (currentRound == mode.rounds)
-                                "Round complete. Tap for results."
-                            else
-                                "Round $currentRound complete. Tap for the next round."
-
-                        GameState.FALSE_START ->
-                            "False start! This round doesn't count.\nTap to retry."
-
-                        GameState.INTERRUPTED ->
-                            "This unfinished session has ended. Saved reactions are kept.\nTap to restart this mode."
-
-                        GameState.SESSION_RESULT ->
-                            "Tap to play this mode again."
-                    }
+                    Spacer(Modifier.width(RushSpace.Md))
 
                     Text(
-                        title,
-                        color = Color.White,
-                        fontSize = when (state) {
-                            GameState.ROUND_RESULT -> 40.sp
-                            GameState.SESSION_RESULT, GameState.INTERRUPTED -> 28.sp
-                            else -> 34.sp
-                        },
+                        mode.title,
+                        modifier = Modifier.weight(1f),
+                        color = if (state == GameState.GO) RushColors.Text else modeAccent(mode),
+                        fontSize = if (compact) 14.sp else 18.sp,
                         fontWeight = FontWeight.Black,
-                        textAlign = TextAlign.Center
+                        textAlign = TextAlign.End
                     )
+                }
 
-                    Spacer(Modifier.height(14.dp))
+                Spacer(Modifier.height(RushSpace.Sm))
 
+                if (
+                    state != GameState.READY &&
+                    state != GameState.INTERRUPTED &&
+                    state != GameState.SESSION_RESULT
+                ) {
                     Text(
-                        subtitle,
-                        color = Color(0xFFD6DCF0),
-                        fontSize = 17.sp,
-                        textAlign = TextAlign.Center
+                        "ROUND $currentRound / ${mode.rounds}",
+                        color = if (state == GameState.GO) RushColors.Text else RushColors.Muted,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.Bold
                     )
 
-                    if ((state == GameState.ROUND_RESULT && sessionReward != null) ||
-                        state == GameState.SESSION_RESULT
+                    Spacer(Modifier.height(RushSpace.Sm))
+                }
+
+                if (compact) {
+                    Text("${mode.recordLabel}: ${formatRecord(records.bestFor(mode))}",
+                        color = if (state == GameState.GO) RushColors.Text else RushColors.Muted,
+                        style = MaterialTheme.typography.bodySmall)
+                } else Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    StatCard(
+                        mode.recordLabel,
+                        formatRecord(records.bestFor(mode)),
+                        Modifier.weight(1f)
+                    )
+
+                    StatCard(
+                        "REACTIONS",
+                        records.lifetimeReactions.toString(),
+                        Modifier.weight(1f)
+                    )
+                }
+
+                Spacer(Modifier.height(RushSpace.Md))
+
+                Box(
+                    modifier = Modifier
+                        .weight(1f)
+                        .fillMaxWidth()
+                        .testTag("game-action")
+                        .clip(RushShapes.Card)
+                        .background(
+                            if (state == GameState.GO) RushColors.Text.copy(alpha = 0.04f) else RushColors.Surface,
+                            RushShapes.Card
+                        )
+                        .border(1.dp, when (state) {
+                            GameState.GO -> RushColors.Mint
+                            GameState.FALSE_START -> RushColors.Danger
+                            GameState.INTERRUPTED -> RushColors.Gold
+                            GameState.WAITING -> RushColors.Gold.copy(alpha = 0.65f)
+                            else -> modeAccent(mode).copy(alpha = 0.4f)
+                        }, RushShapes.Card)
+                        // Bind accessibility actions to the same immutable render snapshot.
+                        .semantics(mergeDescendants = true) { onClick(action = onGameTap) }
+                        // No ripple may linger from a retry into the timing-critical GO field.
+                        .clickable(interactionSource = gameInteraction, indication = null,
+                            role = Role.Button) { onGameTap() },
+                    contentAlignment = Alignment.Center
+                ) {
+                    Column(
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        modifier = Modifier
+                            .verticalScroll(rememberScrollState())
+                            .fillMaxWidth()
+                            .padding(if (compact) RushSpace.Lg else RushSpace.Xl)
                     ) {
-                        Spacer(Modifier.height(12.dp))
-                        ProgressSaveNotice(saveStatus, onRetrySave)
-                    }
-
-                    sessionReward?.let { reward ->
-                        if (reward.newLevel > reward.previousLevel && (
-                            state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
-                        )) {
-                            Spacer(Modifier.height(14.dp))
-                            Text(
-                                "LEVEL UP! LEVEL ${reward.newLevel}",
-                                modifier = Modifier.semantics {
-                                    liveRegion = LiveRegionMode.Polite
-                                },
-                                color = Color(0xFFFFD166),
-                                fontSize = 20.sp,
-                                fontWeight = FontWeight.Black,
-                                textAlign = TextAlign.Center
-                            )
+                        val title = when (state) {
+                            GameState.READY -> mode.title
+                            GameState.WAITING -> "WAIT…"
+                            GameState.GO -> "TAP!"
+                            GameState.ROUND_RESULT -> "$lastScore ms"
+                            GameState.FALSE_START -> "TOO SOON!"
+                            GameState.INTERRUPTED -> "SESSION INTERRUPTED"
+                            GameState.SESSION_RESULT ->
+                                if (mode == GameMode.QUICK_DRAW)
+                                    "DRAW COMPLETE"
+                                else
+                                    "RUSH COMPLETE"
                         }
-                    }
 
-                    if (isNewRecord && (
-                        state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
-                    )) {
-                        Spacer(Modifier.height(18.dp))
+                        val subtitle = when (state) {
+                            GameState.READY ->
+                                "${mode.description}\n\nTap to begin."
 
+                            GameState.WAITING ->
+                                "Don't tap until it turns green."
+
+                            GameState.GO ->
+                                "NOW!"
+
+                            GameState.ROUND_RESULT ->
+                                if (currentRound == mode.rounds)
+                                    "Round complete. Tap for results."
+                                else
+                                    "Round $currentRound complete. Tap for the next round."
+
+                            GameState.FALSE_START ->
+                                "False start! This round doesn't count.\nTap to retry."
+
+                            GameState.INTERRUPTED ->
+                                "This unfinished session has ended. Saved reactions are kept.\nTap to restart this mode."
+
+                            GameState.SESSION_RESULT ->
+                                "Tap to play this mode again."
+                        }
+
+                        if (state == GameState.READY) {
+                            PulseMark(Modifier.size(if (compact) 48.dp else 72.dp), modeAccent(mode))
+                            Spacer(Modifier.height(RushSpace.Lg))
+                        }
                         Text(
-                            "NEW PERSONAL RECORD!\n${mode.recordLabel}: ${formatRecord(records.bestFor(mode))}",
-                            modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-                            color = Color(0xFF62E6B5),
-                            fontSize = 17.sp,
+                            when (state) {
+                                GameState.READY -> "YOUR NEXT CHALLENGE"
+                                GameState.WAITING -> "HOLD YOUR FOCUS"
+                                GameState.GO -> "REACT NOW"
+                                GameState.FALSE_START -> "EARLY TAP"
+                                GameState.INTERRUPTED -> "ROUND ENDED SAFELY"
+                                GameState.ROUND_RESULT -> "REACTION LOCKED"
+                                GameState.SESSION_RESULT -> "SESSION SUMMARY"
+                            },
+                            color = if (state == GameState.GO) RushColors.Text else modeAccent(mode),
+                            style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center
+                        )
+                        Spacer(Modifier.height(RushSpace.Md))
+                        Text(
+                            title,
+                            color = when (state) {
+                                GameState.FALSE_START -> RushColors.Danger
+                                GameState.INTERRUPTED -> RushColors.Gold
+                                else -> RushColors.Text
+                            },
+                            fontSize = when (state) {
+                                GameState.GO -> if (compact) 38.sp else 64.sp
+                                GameState.ROUND_RESULT -> if (compact) 34.sp else 46.sp
+                                GameState.SESSION_RESULT, GameState.INTERRUPTED -> if (compact) 20.sp else 24.sp
+                                else -> if (compact) 24.sp else 34.sp
+                            },
+                            fontFamily = if (state == GameState.GO || state == GameState.ROUND_RESULT) FontFamily.Monospace else FontFamily.SansSerif,
                             fontWeight = FontWeight.Black,
                             textAlign = TextAlign.Center
                         )
-                    }
 
-                    sessionReward?.let { reward ->
-                        if (reward.newlyUnlocked.isNotEmpty() && (
-                            state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
-                        )) {
-                            Spacer(Modifier.height(14.dp))
-                            AchievementUnlockFeedback(reward.newlyUnlocked)
+                        Spacer(Modifier.height(14.dp))
+
+                        Text(
+                            subtitle,
+                            color = if (state == GameState.GO) RushColors.Text else RushColors.Muted,
+                            fontSize = if (compact) 15.sp else 17.sp,
+                            textAlign = TextAlign.Center
+                        )
+
+                        if ((state == GameState.ROUND_RESULT && sessionReward != null) ||
+                            state == GameState.SESSION_RESULT
+                        ) {
+                            Spacer(Modifier.height(12.dp))
+                            ProgressSaveNotice(saveStatus, onRetrySave)
                         }
-                    }
-
-                    if (state == GameState.SESSION_RESULT) {
-                        Spacer(Modifier.height(26.dp))
 
                         sessionReward?.let { reward ->
+                            if (reward.newLevel > reward.previousLevel && (
+                                state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                            )) {
+                                Spacer(Modifier.height(14.dp))
+                                Text(
+                                    "LEVEL UP! LEVEL ${reward.newLevel}",
+                                    modifier = Modifier.semantics {
+                                        liveRegion = LiveRegionMode.Polite
+                                    }.background(RushColors.Gold.copy(alpha = 0.08f), RushShapes.Small)
+                                        .padding(RushSpace.Md),
+                                    color = RushColors.Gold,
+                                    fontSize = 20.sp,
+                                    fontWeight = FontWeight.Black,
+                                    textAlign = TextAlign.Center
+                                )
+                            }
+                        }
+
+                        if (isNewRecord && (
+                            state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                        )) {
+                            Spacer(Modifier.height(18.dp))
+
                             Text(
-                                "MEDAL: ${reward.medal.title}",
-                                color = medalColor(reward.medal),
-                                fontSize = 20.sp,
+                                "NEW PERSONAL RECORD!\n${mode.recordLabel}: ${formatRecord(records.bestFor(mode))}",
+                                modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
+                                    .background(RushColors.Mint.copy(alpha = 0.08f), RushShapes.Small)
+                                    .border(1.dp, RushColors.Mint.copy(alpha = 0.4f), RushShapes.Small)
+                                    .padding(RushSpace.Md),
+                                color = RushColors.Mint,
+                                fontSize = 17.sp,
                                 fontWeight = FontWeight.Black,
                                 textAlign = TextAlign.Center
                             )
+                        }
+
+                        sessionReward?.let { reward ->
+                            if (reward.newlyUnlocked.isNotEmpty() && (
+                                state == GameState.ROUND_RESULT || state == GameState.SESSION_RESULT
+                            )) {
+                                Spacer(Modifier.height(14.dp))
+                                AchievementUnlockFeedback(reward.newlyUnlocked)
+                            }
+                        }
+
+                        if (state == GameState.SESSION_RESULT) {
+                            Spacer(Modifier.height(26.dp))
+
+                            sessionReward?.let { reward ->
+                                MedalBadge(reward.medal, Modifier.fillMaxWidth())
+
+                                Spacer(Modifier.height(10.dp))
+
+                                Text(
+                                    "+${reward.awardedXp} XP",
+                                    color = RushColors.Mint,
+                                    fontSize = 30.sp,
+                                    fontFamily = FontFamily.Monospace,
+                                    fontWeight = FontWeight.Black
+                                )
+
+                                Text(
+                                    "Base ${reward.xp.baseXp} XP • Speed +${reward.xp.speedBonusXp} XP\n" +
+                                        "Consistency +${reward.xp.consistencyBonusXp} XP",
+                                    color = RushColors.Muted,
+                                    fontSize = 13.sp,
+                                    textAlign = TextAlign.Center
+                                )
+
+                                if (reward.awardedXp < reward.xp.totalXp) {
+                                    Text(
+                                        "XP limit reached",
+                                        color = RushColors.Muted,
+                                        fontSize = 13.sp
+                                    )
+                                }
+
+                                Spacer(Modifier.height(18.dp))
+                                PlayerProgressCard(records.totalXp)
+                                Spacer(Modifier.height(18.dp))
+
+                                if (reward.newlyUnlocked.isNotEmpty()) {
+                                    NewAchievementsCard(reward.newlyUnlocked)
+                                    Spacer(Modifier.height(18.dp))
+                                }
+                            }
+
+                            Row(
+                                Modifier.fillMaxWidth(),
+                                horizontalArrangement =
+                                    Arrangement.spacedBy(10.dp)
+                            ) {
+                                MiniResult(
+                                    "BEST",
+                                    "$sessionBest ms",
+                                    Modifier.weight(1f)
+                                )
+
+                                MiniResult(
+                                    "AVERAGE",
+                                    "$averageScore ms",
+                                    Modifier.weight(1f)
+                                )
+                            }
 
                             Spacer(Modifier.height(10.dp))
 
-                            Text(
-                                "+${reward.awardedXp} XP",
-                                color = Color(0xFF62E6B5),
-                                fontSize = 30.sp,
-                                fontWeight = FontWeight.Black
-                            )
-
-                            Text(
-                                "Base ${reward.xp.baseXp} XP • Speed +${reward.xp.speedBonusXp} XP\n" +
-                                    "Consistency +${reward.xp.consistencyBonusXp} XP",
-                                color = Color(0xFFAAB4D0),
-                                fontSize = 13.sp,
-                                textAlign = TextAlign.Center
-                            )
-
-                            if (reward.awardedXp < reward.xp.totalXp) {
-                                Text(
-                                    "XP limit reached",
-                                    color = Color(0xFFAAB4D0),
-                                    fontSize = 13.sp
-                                )
-                            }
-
-                            Spacer(Modifier.height(18.dp))
-                            PlayerProgressCard(records.totalXp)
-                            Spacer(Modifier.height(18.dp))
-
-                            if (reward.newlyUnlocked.isNotEmpty()) {
-                                NewAchievementsCard(reward.newlyUnlocked)
-                                Spacer(Modifier.height(18.dp))
-                            }
-                        }
-
-                        Row(
-                            Modifier.fillMaxWidth(),
-                            horizontalArrangement =
-                                Arrangement.spacedBy(10.dp)
-                        ) {
                             MiniResult(
-                                "BEST",
-                                "$sessionBest ms",
-                                Modifier.weight(1f)
+                                "FALSE STARTS",
+                                falseStarts.toString(),
+                                Modifier.fillMaxWidth()
                             )
 
-                            MiniResult(
-                                "AVERAGE",
-                                "$averageScore ms",
-                                Modifier.weight(1f)
-                            )
-                        }
+                            if (mode.rounds > 1) {
+                                Spacer(Modifier.height(20.dp))
 
-                        Spacer(Modifier.height(10.dp))
-
-                        MiniResult(
-                            "FALSE STARTS",
-                            falseStarts.toString(),
-                            Modifier.fillMaxWidth()
-                        )
-
-                        if (mode.rounds > 1) {
-                            Spacer(Modifier.height(20.dp))
-
-                            sessionScores.forEachIndexed { index, score ->
-                                Text(
-                                    "Round ${index + 1}: $score ms",
-                                    color = Color(0xFFAAB4D0),
-                                    fontSize =
-                                        if (mode.rounds >= 10) 12.sp
-                                        else 14.sp
-                                )
+                                sessionScores.forEachIndexed { index, score ->
+                                    Surface(
+                                        modifier = Modifier.fillMaxWidth().padding(vertical = RushSpace.Xs),
+                                        color = RushColors.SurfaceRaised, shape = RushShapes.Small
+                                    ) {
+                                        Text(
+                                            "Round ${index + 1}: $score ms",
+                                            modifier = Modifier.padding(RushSpace.Md),
+                                            color = RushColors.Text, style = MaterialTheme.typography.bodyMedium,
+                                            fontFamily = FontFamily.Monospace
+                                        )
+                                    }
+                                }
                             }
                         }
                     }
                 }
+
+                Spacer(Modifier.height(RushSpace.Sm))
+
+                Text(
+                    when (state) {
+                        GameState.READY ->
+                            "${mode.title} • ${mode.rounds} ${if (mode.rounds == 1) "round" else "rounds"}"
+
+                        GameState.SESSION_RESULT ->
+                            "Tap HOME to choose another challenge."
+
+                        GameState.INTERRUPTED ->
+                            "Tap to restart, or choose HOME for another mode."
+
+                        else ->
+                            "Stay ready. Don't anticipate the signal."
+                    },
+                    color = if (state == GameState.GO) RushColors.Text else RushColors.Subtle,
+                    fontSize = 12.sp,
+                    textAlign = TextAlign.Center
+                )
+
+                Spacer(Modifier.height(RushSpace.Xs))
             }
-
-            Spacer(Modifier.height(14.dp))
-
-            Text(
-                when (state) {
-                    GameState.READY ->
-                        "${mode.title} • ${mode.rounds} ${if (mode.rounds == 1) "round" else "rounds"}"
-
-                    GameState.SESSION_RESULT ->
-                        "Tap HOME to choose another challenge."
-
-                    GameState.INTERRUPTED ->
-                        "Tap to restart, or choose HOME for another mode."
-
-                    else ->
-                        "Stay ready. Don't anticipate the signal."
-                },
-                color = Color(0xFF8D98B8),
-                fontSize = 12.sp,
-                textAlign = TextAlign.Center
-            )
-
-            Spacer(Modifier.height(8.dp))
         }
     }
 }
 
 @Composable
 private fun StartupScreen(failed: Boolean, onRetry: () -> Unit) {
-    Surface(modifier = Modifier.fillMaxSize(), color = Color(0xFF0B1020)) {
+    Surface(modifier = Modifier.fillMaxSize(), color = RushColors.Background) {
         Column(
             modifier = Modifier.fillMaxSize().padding(24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.Center
         ) {
+            PulseMark(Modifier.size(64.dp))
+            Spacer(Modifier.height(RushSpace.Xl))
             Text(
                 if (failed) "Player progress could not be loaded." else "Loading player progress…",
-                color = Color.White,
+                color = RushColors.Text,
                 fontSize = 18.sp,
                 textAlign = TextAlign.Center
             )
@@ -972,7 +922,10 @@ internal fun ProgressSaveNotice(
 ) {
     if (status == SaveStatus.IDLE) return
     Column(
-        modifier = modifier.fillMaxWidth(),
+        modifier = modifier.fillMaxWidth()
+            .background(RushColors.Mint.copy(alpha = 0.06f), RushShapes.Small)
+            .border(1.dp, if (status == SaveStatus.FAILED) RushColors.Gold else RushColors.Border, RushShapes.Small)
+            .padding(RushSpace.Md),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
         Text(
@@ -983,7 +936,7 @@ internal fun ProgressSaveNotice(
                 SaveStatus.FAILED -> "Completed progress could not be saved. Keep the app open and retry."
             },
             modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite },
-            color = if (status == SaveStatus.FAILED) Color(0xFFFFD166) else Color(0xFF62E6B5),
+            color = if (status == SaveStatus.FAILED) RushColors.Gold else RushColors.Mint,
             fontSize = if (status == SaveStatus.FAILED) 14.sp else 12.sp,
             textAlign = TextAlign.Center
         )
@@ -996,128 +949,58 @@ internal fun ProgressSaveNotice(
 
 private fun formatRecord(scoreMs: Int): String = if (scoreMs == 0) "—" else "$scoreMs ms"
 
-private fun medalColor(medal: PerformanceMedal): Color = when (medal) {
-    PerformanceMedal.ELITE -> Color(0xFF62E6B5)
-    PerformanceMedal.PLATINUM -> Color(0xFFAFD8F8)
-    PerformanceMedal.GOLD -> Color(0xFFFFD166)
-    PerformanceMedal.SILVER -> Color(0xFFCCD3DF)
-    PerformanceMedal.BRONZE -> Color(0xFFE4A16B)
-    PerformanceMedal.UNRANKED -> Color(0xFFAAB4D0)
-}
-
 @Composable
 private fun PlayerProgressCard(totalXp: Long) {
     val progress = PlayerProgression.levelProgress(totalXp)
     Card(
-        modifier = Modifier.fillMaxWidth(),
-        colors = CardDefaults.cardColors(containerColor = Color(0xFF151D35)),
-        shape = RoundedCornerShape(18.dp)
+        modifier = Modifier.fillMaxWidth(), colors = CardDefaults.cardColors(containerColor = RushColors.Surface),
+        border = BorderStroke(1.dp, RushColors.Mint.copy(alpha = 0.4f)), shape = RushShapes.Card
     ) {
         Column(
-            modifier = Modifier.fillMaxWidth().padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+            Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(RushColors.Mint.copy(alpha = 0.09f), Color.Transparent)))
+                .padding(RushSpace.Lg), verticalArrangement = Arrangement.spacedBy(RushSpace.Md)
         ) {
-            Text(
-                "LEVEL ${progress.level}",
-                color = Color(0xFF62E6B5),
-                fontSize = 20.sp,
-                fontWeight = FontWeight.Black
-            )
-            Text(
-                "TOTAL XP: ${progress.totalXp}",
-                color = Color.White,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text("PLAYER PROGRESSION", color = RushColors.Muted, style = MaterialTheme.typography.labelSmall)
+            Text("LEVEL ${progress.level}", color = RushColors.Mint, fontSize = 26.sp, fontWeight = FontWeight.Black)
+            Text("TOTAL XP: ${progress.totalXp}", color = RushColors.Text, style = MaterialTheme.typography.titleMedium)
             LinearProgressIndicator(
-                progress = { progress.fraction },
-                modifier = Modifier.fillMaxWidth(),
-                color = Color(0xFF62E6B5),
-                trackColor = Color(0xFF2A3554)
+                progress = { progress.fraction }, modifier = Modifier.fillMaxWidth().height(8.dp),
+                color = RushColors.Mint, trackColor = RushColors.Border, drawStopIndicator = {}
             )
             Text(
                 if (progress.isMaxLevel) "MAX LEVEL"
                 else "${progress.xpIntoLevel} / ${progress.xpToNextLevel} XP TO LEVEL ${progress.level + 1}",
-                color = Color(0xFFAAB4D0),
-                fontSize = 12.sp
+                color = RushColors.Muted, style = MaterialTheme.typography.bodySmall
             )
         }
     }
 }
 
 @Composable
-private fun StatCard(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier
-) {
+private fun StatCard(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = Color(0xFF151D35)
-        ),
-        shape = RoundedCornerShape(18.dp)
+        modifier = modifier, colors = CardDefaults.cardColors(containerColor = RushColors.Surface),
+        border = BorderStroke(1.dp, RushColors.Border), shape = RushShapes.Small
     ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(16.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                label,
-                color = Color(0xFF8D98B8),
-                fontSize = 11.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                value,
-                color = Color.White,
-                fontSize = 22.sp,
-                fontWeight = FontWeight.Bold
-            )
+        Column(Modifier.fillMaxWidth().padding(RushSpace.Lg), verticalArrangement = Arrangement.spacedBy(RushSpace.Sm)) {
+            Text(label, color = RushColors.Muted, style = MaterialTheme.typography.labelSmall)
+            Text(value, color = RushColors.Text, fontSize = 24.sp, fontWeight = FontWeight.Bold, fontFamily = FontFamily.Monospace)
         }
     }
 }
 
-
 @Composable
-private fun MiniResult(
-    label: String,
-    value: String,
-    modifier: Modifier = Modifier
-) {
+private fun MiniResult(label: String, value: String, modifier: Modifier = Modifier) {
     Card(
-        modifier = modifier,
-        colors = CardDefaults.cardColors(
-            containerColor = Color.White.copy(alpha = 0.06f)
-        ),
-        shape = RoundedCornerShape(14.dp)
+        modifier = modifier, colors = CardDefaults.cardColors(containerColor = RushColors.SurfaceRaised),
+        border = BorderStroke(1.dp, RushColors.Border), shape = RushShapes.Small
     ) {
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
+            Modifier.fillMaxWidth().padding(RushSpace.Md), horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(RushSpace.Sm)
         ) {
-            Text(
-                text = label,
-                color = Color(0xFF8D98B8),
-                fontSize = 10.sp,
-                fontWeight = FontWeight.Bold
-            )
-
-            Spacer(Modifier.height(4.dp))
-
-            Text(
-                text = value,
-                color = Color.White,
-                fontSize = 18.sp,
-                fontWeight = FontWeight.Bold
-            )
+            Text(label, color = RushColors.Muted, style = MaterialTheme.typography.labelSmall, textAlign = TextAlign.Center)
+            Text(value, color = RushColors.Text, style = MaterialTheme.typography.titleLarge, fontFamily = FontFamily.Monospace)
         }
     }
 }

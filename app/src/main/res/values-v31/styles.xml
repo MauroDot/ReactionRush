@@ -1,0 +1,8 @@
+<resources>
+    <!-- Platform splash only: no additional activity, dependency, animation, or hold time. -->
+    <style name="Theme.ReactionRush" parent="Theme.ReactionRush.Base">
+        <item name="android:windowBackground">@color/rr_navy</item>
+        <item name="android:windowSplashScreenBackground">@color/rr_navy</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/rr_splash_icon</item>
+    </style>
+</resources>
