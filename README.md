@@ -375,6 +375,54 @@ Audio preparation reference: [MediaPlayer state/resources](https://developer.and
 Short-sample constraints: [SoundPool](https://developer.android.com/reference/android/media/SoundPool).
 Focus policy: [Android audio focus](https://developer.android.com/media/optimize/audio-focus).
 
+## RR-006A: Cyber arcade backgrounds
+
+Home and the three game modes use only the four backgrounds approved for RR-006A
+from `ReactionRush_RR006_Graphics_Review_Pack.zip`, SHA-256
+`282377378B33250BE9791A50B117A90DC8988AB5BEC8C84560DB31924E7BE273`.
+The current assignment's approval supersedes the package's older candidate/review note
+for these four named backgrounds. Source artwork and the original ZIP remain intact.
+
+| Android resource in `drawable-nodpi` | Dimensions | Format | Bytes |
+| --- | --- | --- | ---: |
+| `rr_main_menu_background.webp` | 941 × 1672 | Lossless WebP | 1,822,956 |
+| `rr_quick_draw_background.webp` | 1440 × 2560 | Supplied WebP | 299,888 |
+| `rr_classic_rush_background.webp` | 1440 × 2560 | Supplied WebP | 259,386 |
+| `rr_endurance_rush_background.webp` | 1440 × 2560 | Supplied WebP | 333,050 |
+
+The menu conversion preserves every decoded RGBA pixel of its approved PNG. The
+three supplied Android WebPs are copied byte-for-byte. Runtime artwork totals
+2,715,280 bytes; PNG masters and review files are not packaged as duplicate resources.
+As noted in the source manifest, mode artwork was upscaled from roughly 538 × 954
+concept crops; its export dimensions do not imply native detail at that resolution.
+
+`CyberArcadeBackground` draws a fixed, centered, cropped image beneath an 86% navy
+scrim and the existing native controls. It stays outside Home's scrolling and entrance
+animation, respects the existing safe-drawing insets, and contributes no accessibility
+label, focus target, or input action. Existing opaque cards and typography remain.
+The scrim provides at least 4.90:1 contrast for the checked text/accent colors even
+against a white source pixel.
+
+Each screen's painter is resolved on entry, before a round can begin. The game-mode
+resource stays fixed throughout READY, WAITING, GO, results, false starts, and retries.
+GO and false starts retain their immediate opaque native signal colors over the
+artwork; no asset switch, image loading, animation, coroutine, or crossfade is attached
+to a signal transition. Timing, input snapshots, lifecycle, audio, progression,
+records, and persistence logic are unchanged.
+
+WebP compression reduces packaged size, not decoded bitmap memory. At ARGB_8888,
+the menu is about 6.00 MiB and each mode about 14.06 MiB; all four would total
+48.19 MiB if retained together. The UI resolves the current screen's painter without
+preloading a global four-image cache. Navigation can temporarily retain older bitmaps
+until garbage collection; physical-device memory and frame behavior still need acceptance.
+
+For physical acceptance, inspect Home and all three READY screens on small and tall
+devices, then WAITING, GO, false starts, retries, interruption, and session results.
+Check artwork crop, text readability, immediate green GO feedback, large fonts,
+TalkBack navigation, and stable audio. No background animation or new motion setting
+is introduced. RR-006A physical acceptance and promotion remain separate from local
+engineering validation.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
