@@ -576,7 +576,7 @@ private fun GameScreen(
         else -> Color.Transparent
     }
 
-    CyberArcadeBackground(gameBackdrop(mode)) {
+    CyberArcadeBackground(sessionBackdrop(mode, state, sessionReward != null)) {
         // Immediate solid signal colors cover the fixed mode artwork without changing it.
         Box(Modifier.matchParentSize().background(bg))
         BoxWithConstraints(Modifier.fillMaxSize()) {

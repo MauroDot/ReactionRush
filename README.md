@@ -423,6 +423,61 @@ TalkBack navigation, and stable audio. No background animation or new motion set
 is introduced. RR-006A physical acceptance and promotion remain separate from local
 engineering validation.
 
+## RR-006B: Results and medal artwork
+
+The six production images come from the owner-approved
+`ReactionRush_RR006B_Finalized_Candidates.zip`, SHA-256
+`E33CF97DB5090770C90123DD72678C2A084969B58C00B535E60E12511EF0EF73`.
+The current integration assignment supersedes its older preparation-only status.
+Each runtime file matches the finalized package's `asset_manifest.json` byte count
+and SHA-256. The earlier Art Review Candidates package and the light/dark review
+montage are not runtime assets. Original sources remain intact.
+
+| Resource in `drawable-nodpi` | Dimensions | Format | Bytes |
+| --- | --- | --- | ---: |
+| `rr_results_background.webp` | 1440 × 2560 | WebP RGB | 512,982 |
+| `rr_medal_bronze.png` | 512 × 512 | PNG RGBA | 302,555 |
+| `rr_medal_silver.png` | 512 × 512 | PNG RGBA | 300,831 |
+| `rr_medal_gold.png` | 512 × 512 | PNG RGBA | 282,103 |
+| `rr_medal_platinum.png` | 512 × 512 | PNG RGBA | 310,216 |
+| `rr_medal_elite.png` | 512 × 512 | PNG RGBA | 284,234 |
+
+Existing `PerformanceMedal` values select artwork explicitly by name. Bronze,
+Silver, Gold, Platinum, and Elite use their corresponding PNG. `UNRANKED` has no
+ranked artwork and retains the neutral native icon and `MEDAL: UNRANKED` text.
+There is no new achievement tier or award mechanic. Quick Draw's valid reaction and
+completed Rush-session rounded averages still use the existing thresholds:
+Elite below 200 ms, Platinum 200–249, Gold 250–299, Silver 300–349,
+Bronze 350–449, and Unranked 450 ms or higher.
+
+The results background appears only on `SESSION_RESULT` with an existing verified
+session reward. READY, WAITING, GO, nonfinal results, false starts, and interruptions
+keep their RR-006A mode artwork. The shared static background renderer retains its
+centered crop, existing insets, decorative semantics, and default 86% navy overlay;
+its optional scrim-alpha parameter permits presentation tuning without changing
+saved settings. No result image is selected or decoded in a timed round.
+
+Ranked medals use bounded 64 dp images with `ContentScale.Fit`, preserving alpha and
+framing. Their adjacent textual labels remain authoritative for accessibility.
+The shared `MedalBadge` also updates retained-history details using the medal already
+stored with each session. Scores, personal-record and achievement feedback, XP,
+levels, history, navigation, timing, lifecycle, audio, and haptic logic are unchanged.
+
+The six files add 1,992,921 bytes. Decoded ARGB_8888 memory is approximately 14.06 MiB
+for the results background and 1 MiB per medal. Images are resolved when their UI
+appears rather than preloading all art. Navigation can temporarily retain old bitmaps
+until garbage collection. The source medals have roughly 260–310 pixels of effective
+detail before the supplied 512-pixel export; the results scene is also upscaled concept
+art. Alpha is preserved byte-for-byte; edge fringing and crop quality require physical
+inspection at actual display size.
+
+For RR-006B physical acceptance, complete all three modes and inspect the results
+background, scrolling information, medal label, XP, records, and achievement feedback.
+Inspect all five medal styles and the neutral Unranked state, including retained
+history details. Check TalkBack, large fonts, interruptions, replay navigation,
+audio/haptics, and repeated navigation on the target phone. Promotion and production
+release remain separate from local engineering validation.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 

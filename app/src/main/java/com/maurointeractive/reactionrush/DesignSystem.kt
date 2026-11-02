@@ -4,6 +4,7 @@ import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -22,7 +23,10 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.testTag
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -185,22 +189,32 @@ internal fun medalTint(medal: PerformanceMedal): Color = when (medal) {
 @Composable
 internal fun MedalBadge(medal: PerformanceMedal, modifier: Modifier = Modifier) {
     val tint = medalTint(medal)
+    val artwork = medalArtwork(medal)
     Column(
         modifier.background(tint.copy(alpha = 0.09f), RushShapes.Small)
             .border(1.dp, tint.copy(alpha = 0.5f), RushShapes.Small).padding(RushSpace.Lg),
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(RushSpace.Sm)
     ) {
-        Canvas(Modifier.size(38.dp)) {
-            drawCircle(tint, style = Stroke(2.dp.toPx()))
-            val diamond = Path().apply {
-                moveTo(size.width / 2, size.height * 0.2f)
-                lineTo(size.width * 0.73f, size.height / 2)
-                lineTo(size.width / 2, size.height * 0.8f)
-                lineTo(size.width * 0.27f, size.height / 2)
-                close()
+        if (artwork != null) {
+            Image(
+                painter = painterResource(artwork),
+                contentDescription = null,
+                modifier = Modifier.size(64.dp).testTag("medal-art-${medal.name}"),
+                contentScale = ContentScale.Fit
+            )
+        } else {
+            Canvas(Modifier.size(38.dp)) {
+                drawCircle(tint, style = Stroke(2.dp.toPx()))
+                val diamond = Path().apply {
+                    moveTo(size.width / 2, size.height * 0.2f)
+                    lineTo(size.width * 0.73f, size.height / 2)
+                    lineTo(size.width / 2, size.height * 0.8f)
+                    lineTo(size.width * 0.27f, size.height / 2)
+                    close()
+                }
+                drawPath(diamond, tint)
             }
-            drawPath(diamond, tint)
         }
         Text("MEDAL: ${medal.title}", color = tint, style = MaterialTheme.typography.titleMedium)
     }
