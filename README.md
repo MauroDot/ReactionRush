@@ -375,6 +375,109 @@ Audio preparation reference: [MediaPlayer state/resources](https://developer.and
 Short-sample constraints: [SoundPool](https://developer.android.com/reference/android/media/SoundPool).
 Focus policy: [Android audio focus](https://developer.android.com/media/optimize/audio-focus).
 
+## RR-006A: Cyber arcade backgrounds
+
+Home and the three game modes use only the four backgrounds approved for RR-006A
+from `ReactionRush_RR006_Graphics_Review_Pack.zip`, SHA-256
+`282377378B33250BE9791A50B117A90DC8988AB5BEC8C84560DB31924E7BE273`.
+The current assignment's approval supersedes the package's older candidate/review note
+for these four named backgrounds. Source artwork and the original ZIP remain intact.
+
+| Android resource in `drawable-nodpi` | Dimensions | Format | Bytes |
+| --- | --- | --- | ---: |
+| `rr_main_menu_background.webp` | 941 × 1672 | Lossless WebP | 1,822,956 |
+| `rr_quick_draw_background.webp` | 1440 × 2560 | Supplied WebP | 299,888 |
+| `rr_classic_rush_background.webp` | 1440 × 2560 | Supplied WebP | 259,386 |
+| `rr_endurance_rush_background.webp` | 1440 × 2560 | Supplied WebP | 333,050 |
+
+The menu conversion preserves every decoded RGBA pixel of its approved PNG. The
+three supplied Android WebPs are copied byte-for-byte. Runtime artwork totals
+2,715,280 bytes; PNG masters and review files are not packaged as duplicate resources.
+As noted in the source manifest, mode artwork was upscaled from roughly 538 × 954
+concept crops; its export dimensions do not imply native detail at that resolution.
+
+`CyberArcadeBackground` draws a fixed, centered, cropped image beneath an 86% navy
+scrim and the existing native controls. It stays outside Home's scrolling and entrance
+animation, respects the existing safe-drawing insets, and contributes no accessibility
+label, focus target, or input action. Existing opaque cards and typography remain.
+The scrim provides at least 4.90:1 contrast for the checked text/accent colors even
+against a white source pixel.
+
+Each screen's painter is resolved on entry, before a round can begin. The game-mode
+resource stays fixed throughout READY, WAITING, GO, results, false starts, and retries.
+GO and false starts retain their immediate opaque native signal colors over the
+artwork; no asset switch, image loading, animation, coroutine, or crossfade is attached
+to a signal transition. Timing, input snapshots, lifecycle, audio, progression,
+records, and persistence logic are unchanged.
+
+WebP compression reduces packaged size, not decoded bitmap memory. At ARGB_8888,
+the menu is about 6.00 MiB and each mode about 14.06 MiB; all four would total
+48.19 MiB if retained together. The UI resolves the current screen's painter without
+preloading a global four-image cache. Navigation can temporarily retain older bitmaps
+until garbage collection; physical-device memory and frame behavior still need acceptance.
+
+For physical acceptance, inspect Home and all three READY screens on small and tall
+devices, then WAITING, GO, false starts, retries, interruption, and session results.
+Check artwork crop, text readability, immediate green GO feedback, large fonts,
+TalkBack navigation, and stable audio. No background animation or new motion setting
+is introduced. RR-006A physical acceptance and promotion remain separate from local
+engineering validation.
+
+## RR-006B: Results and medal artwork
+
+The six production images come from the owner-approved
+`ReactionRush_RR006B_Finalized_Candidates.zip`, SHA-256
+`E33CF97DB5090770C90123DD72678C2A084969B58C00B535E60E12511EF0EF73`.
+The current integration assignment supersedes its older preparation-only status.
+Each runtime file matches the finalized package's `asset_manifest.json` byte count
+and SHA-256. The earlier Art Review Candidates package and the light/dark review
+montage are not runtime assets. Original sources remain intact.
+
+| Resource in `drawable-nodpi` | Dimensions | Format | Bytes |
+| --- | --- | --- | ---: |
+| `rr_results_background.webp` | 1440 × 2560 | WebP RGB | 512,982 |
+| `rr_medal_bronze.png` | 512 × 512 | PNG RGBA | 302,555 |
+| `rr_medal_silver.png` | 512 × 512 | PNG RGBA | 300,831 |
+| `rr_medal_gold.png` | 512 × 512 | PNG RGBA | 282,103 |
+| `rr_medal_platinum.png` | 512 × 512 | PNG RGBA | 310,216 |
+| `rr_medal_elite.png` | 512 × 512 | PNG RGBA | 284,234 |
+
+Existing `PerformanceMedal` values select artwork explicitly by name. Bronze,
+Silver, Gold, Platinum, and Elite use their corresponding PNG. `UNRANKED` has no
+ranked artwork and retains the neutral native icon and `MEDAL: UNRANKED` text.
+There is no new achievement tier or award mechanic. Quick Draw's valid reaction and
+completed Rush-session rounded averages still use the existing thresholds:
+Elite below 200 ms, Platinum 200–249, Gold 250–299, Silver 300–349,
+Bronze 350–449, and Unranked 450 ms or higher.
+
+The results background appears only on `SESSION_RESULT` with an existing verified
+session reward. READY, WAITING, GO, nonfinal results, false starts, and interruptions
+keep their RR-006A mode artwork. The shared static background renderer retains its
+centered crop, existing insets, decorative semantics, and default 86% navy overlay;
+its optional scrim-alpha parameter permits presentation tuning without changing
+saved settings. No result image is selected or decoded in a timed round.
+
+Ranked medals use bounded 64 dp images with `ContentScale.Fit`, preserving alpha and
+framing. Their adjacent textual labels remain authoritative for accessibility.
+The shared `MedalBadge` also updates retained-history details using the medal already
+stored with each session. Scores, personal-record and achievement feedback, XP,
+levels, history, navigation, timing, lifecycle, audio, and haptic logic are unchanged.
+
+The six files add 1,992,921 bytes. Decoded ARGB_8888 memory is approximately 14.06 MiB
+for the results background and 1 MiB per medal. Images are resolved when their UI
+appears rather than preloading all art. Navigation can temporarily retain old bitmaps
+until garbage collection. The source medals have roughly 260–310 pixels of effective
+detail before the supplied 512-pixel export; the results scene is also upscaled concept
+art. Alpha is preserved byte-for-byte; edge fringing and crop quality require physical
+inspection at actual display size.
+
+For RR-006B physical acceptance, complete all three modes and inspect the results
+background, scrolling information, medal label, XP, records, and achievement feedback.
+Inspect all five medal styles and the neutral Unranked state, including retained
+history details. Check TalkBack, large fonts, interruptions, replay navigation,
+audio/haptics, and repeated navigation on the target phone. Promotion and production
+release remain separate from local engineering validation.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 

@@ -273,11 +273,10 @@ private fun HomeScreen(
     val homeScroll = rememberScrollState()
     val navigationScope = rememberCoroutineScope()
     var modeSectionOffset by remember { mutableIntStateOf(0) }
-    Surface(modifier = Modifier.fillMaxSize(), color = RushColors.Background) {
+    CyberArcadeBackground(ArcadeBackdrop.HOME) {
         Entrance { entrance ->
             Column(
                 modifier = entrance.fillMaxSize()
-                    .background(Brush.verticalGradient(listOf(Color(0xFF12223A), RushColors.Background, RushColors.Background)))
                     .verticalScroll(homeScroll).padding(RushSpace.Xl),
                 verticalArrangement = Arrangement.spacedBy(RushSpace.Lg)
             ) {
@@ -574,13 +573,12 @@ private fun GameScreen(
     val bg = when (state) {
         GameState.GO -> RushColors.Success
         GameState.FALSE_START -> Color(0xFF502235)
-        else -> RushColors.Background
+        else -> Color.Transparent
     }
 
-    Surface(
-        modifier = Modifier.fillMaxSize(),
-        color = bg
-    ) {
+    CyberArcadeBackground(sessionBackdrop(mode, state, sessionReward != null)) {
+        // Immediate solid signal colors cover the fixed mode artwork without changing it.
+        Box(Modifier.matchParentSize().background(bg))
         BoxWithConstraints(Modifier.fillMaxSize()) {
             val compact = maxHeight < 640.dp || LocalDensity.current.fontScale > 1.2f
             Column(
