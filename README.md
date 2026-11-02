@@ -478,6 +478,94 @@ history details. Check TalkBack, large fonts, interruptions, replay navigation,
 audio/haptics, and repeated navigation on the target phone. Promotion and production
 release remain separate from local engineering validation.
 
+## RR-007A: Android 16 / API 36 compatibility
+
+The app compiles against and targets API 36; the supported minimum remains API 26.
+The manifest identifies Reaction Rush as a game (`appCategory="game"`).
+[Android 16 documents a game exception](https://developer.android.com/about/versions/16/behavior-changes-16)
+to its default large-screen orientation overrides; the
+existing portrait activity is preserved. This does not establish unrestricted
+landscape, foldable, ChromeOS, or OEM compatibility.
+
+Application ID, version `1.0` / code `1`, bytecode target 17, signing configuration,
+dependencies, gameplay, saves, and approved artwork/audio remain unchanged. Local
+validation uses Gradle 8.13, AGP 8.13.2, Kotlin plugins 2.1.20, and an actual Java 21
+Gradle daemon. Required SDK packages include `platforms;android-36` (tested revision
+2), Build Tools 35.0.0 selected by AGP, and emulator images matching the tested APIs.
+Build Tools 36.0.0 was already installed and is not an additional requirement.
+API 36 phone and tablet testing share `system-images;android-36;google_apis;x86_64`
+revision 7. Provisioning added command-line tools 23.0 and isolated AVDs; existing
+API 35/37 installations and original AVD data were preserved.
+
+```powershell
+.\gradlew.bat --version
+.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+# Select one disposable emulator, never an owner's device/data.
+$previousSerial = $env:ANDROID_SERIAL
+try {
+    $env:ANDROID_SERIAL = 'emulator-5558'
+    .\gradlew.bat :app:connectedDebugAndroidTest
+} finally { $env:ANDROID_SERIAL = $previousSerial }
+```
+
+Local results on November 2, 2026:
+
+| Isolated environment | Configuration | Connected results |
+| --- | --- | --- |
+| `RR007A_API35_Pixel8` / `emulator-5556` | Existing API 35 Play Store image/profile, fresh data; 1080×2400, 420 dpi | 55/55 passed, Gradle exit 0 |
+| `RR007A_API36_Phone` / `emulator-5558` | API 36 Google APIs r7; 1080×2400, 420 dpi | 55/55 passed, Gradle exit 0 |
+| `RR007A_API36_Tablet` / `emulator-5560` | API 36 Google APIs r7; 2560×1600, 320 dpi, device smallest width 800 dp | Controlled rerun: 55/55 passed, Gradle exit 0 |
+
+Unit tests passed 234/234, including the unchanged 119 API-35-pinned Robolectric
+tests. Lint and debug assembly exited 0; the debug APK signature verified. Lint has
+zero errors and nine warnings (previously ten): OldTargetApi, five dependency
+updates, Robolectric version availability, and two existing orientation warnings.
+No warning was suppressed. SDK XML schema-version output is an environment warning.
+
+The connected suite adds eight real-Activity compatibility tests to the existing
+47: package/target/category identity, foreground launch, actual window insets and
+reachable controls, navigation, focus loss, WAITING/GO interruptions, recreation,
+and exactly-once persistence across all three modes. Two additional focused tests
+passed at actual 200% system font scale and 520 dpi display scaling; settings were
+restored. These checks do not prove physical gestures, audio perception, or TalkBack.
+
+Separate emulator checks verified committed edge-swipe Back on three secondary
+screens, three-button mode with explicitly labelled KEYCODE_BACK fallback, and
+large-font navigation with animations disabled. A real completed Quick Draw survived
+background process termination with a changed PID and byte-identical preferences;
+force-stop during screenshot-confirmed WAITING preserved earned progression after
+relaunch. A phone landscape request remained portrait, so full landscape acceptance
+is pending. At the final local-validation checkpoint, the original Pixel 8 player
+save was byte-identical. The owner later accepted RR-007A-DIAG-001's benign
+reconciliation: four additional completed sessions explain the newer save, while
+all 11 original history entries, prior achievements, settings and historical records
+remain preserved. Both preservation references are retained separately; the
+responsible operator and input mechanism are unknown.
+
+Preserved diagnostic attempts include AGP 8.13.2 `--serial` filtering failures before
+test execution, an interrupted new-test scroll with a frozen Compose clock (fixed
+by restoring the helper's prior clock setting), and an auxiliary nested-button
+locator failure (fixed only in ignored QA tooling). An initial navigation-restoration
+readback mismatch was retained; later read-only verification confirmed all original
+settings. The tablet's first boot produced a SystemUI KeyguardService ANR before app
+launch and instrumentation; four foreground timeouts and an interrupted fifth case
+are preserved. The unchanged 55-test rerun passed after system-service stabilization and explicit
+acknowledgment of the one-time letterbox tutorial, with no assertion or app changes.
+The app remains portrait-letterboxed on the landscape tablet display (600×800 dp
+app window on a 1280×800 dp display). Strict UTP
+TLS validation passed without trust-store or security changes.
+Logs, XML/HTML reports, screenshots, prior outputs and preservation manifests remain
+under the separate ignored `app/build/qa-rr007a-*` evidence directory.
+
+On November 2, 2026, the owner reported API 36 physical acceptance **7/7 PASS**:
+Installation, Gameplay, Interruptions, Audio/Haptics, Navigation, Accessibility and
+Tablet. This owner-reported acceptance is separate from automated testing. Device
+identifiers, Android versions/builds, actual testing timestamps, screenshots and
+measurements were not supplied; the automated coverage and limitations above remain
+as recorded. Acceptance and the later preservation reconciliation are stored in
+separate local ignored evidence files without replacing historical QA records.
+Remote promotion, CI acceptance, production signing and release remain separate.
+
 ## Cloud APK build
 The included GitHub Actions workflow runs unit tests and Android lint, then builds a debug APK for pull requests and pushes to `main`, or manually from the Actions tab. Download the `ReactionRush-debug-apk` artifact and install `app-debug.apk` on an Android device.
 
